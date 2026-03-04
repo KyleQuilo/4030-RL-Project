@@ -1,6 +1,6 @@
 # 4030-RL-Project
-ROS 2 Navigation RL Environment (AISE 4030)
-Project Summary
+# ROS 2 Navigation RL Environment (AISE 4030)
+## Project Summary
 
 This project implements a ROS 2 plus Gazebo mobile robot navigation environment wrapped in a Gymnasium style API for reinforcement learning. The TurtleBot3 Burger robot is controlled using continuous velocity commands and observes the environment using simulated 2D LiDAR and odometry. Phase 2 focuses on environment API confirmation and a Stable Baselines3 PPO baseline wrapper.
 
