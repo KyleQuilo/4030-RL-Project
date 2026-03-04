@@ -17,7 +17,7 @@ GPU optional for later training
 
 ## Dependencies
 
-## Python packages
+### Python packages
 gymnasium
 stable baselines3
 numpy
@@ -28,7 +28,7 @@ Install with pip
 
 pip install -r requirements.txt
 
-## ROS packages
+### ROS packages
 TurtleBot3 packages for Jazzy and simulation packages must be installed via apt.
 
 ## Setup
@@ -37,13 +37,13 @@ source /opt/ros/jazzy/setup.bash
 2 Set TurtleBot3 model
 export TURTLEBOT3_MODEL=burger
 
-## Optional: make it permanent
+### Optional: make it permanent
 
 echo "export TURTLEBOT3_MODEL=burger" >> ~/.bashrc
 source ~/.bashrc
 Launch Simulation
 
-## In Terminal 1
+### In Terminal 1
 
 ros2 launch turtlebot3_gazebo turtlebot3_world.launch.py
 
@@ -51,19 +51,19 @@ Leave this running.
 
 Verify ROS Topics
 
-## In Terminal 2
+### In Terminal 2
 
 ros2 topic list
 ros2 topic info /scan
 ros2 topic info /odom
 ros2 topic info /cmd_vel
 
-## Expected topics
+### Expected topics
 /scan publishes sensor_msgs msg LaserScan
 /odom publishes nav_msgs msg Odometry
 /cmd_vel uses geometry_msgs msg TwistStamped
 
-## Optional sensor sanity checks
+### Optional sensor sanity checks
 
 ros2 topic echo /scan --once
 ros2 topic echo /odom --once
@@ -90,7 +90,7 @@ Topic names
 /odom
 /cmd_vel
 
-## Environment constants
+### Environment constants
 lidar_beams set to 60
 control_hz set to 10
 dt set to 0.1
