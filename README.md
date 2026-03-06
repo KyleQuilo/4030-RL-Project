@@ -143,9 +143,11 @@ Helper functions for configuration loading and shared utilities.
 Central configuration file containing topics and environment parameters.
 
 `ppo_results/`
+
 Output directory for logs, checkpoints, and training results.
 
 `launch/`
+
 Launch related files for simulation support.
 
 ## Phase 2 Deliverable Purpose
