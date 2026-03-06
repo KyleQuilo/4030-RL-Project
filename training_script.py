@@ -1,5 +1,6 @@
 import numpy as np
 import torch
+
 from environment import Ros2NavEnv
 from ppo_agent import PPOAgent
 from utils import load_config
@@ -28,9 +29,6 @@ def run_task1_verification(env):
 
     Args:
         env (Ros2NavEnv): The ROS 2 navigation environment.
-
-    Returns:
-        None
     """
     device = get_device()
 
@@ -77,8 +75,7 @@ def build_agent(env, config):
         PPOAgent: Configured PPO agent instance.
     """
     ppo_cfg = config.get("ppo", {})
-    agent = PPOAgent(env, config=ppo_cfg)
-    return agent
+    return PPOAgent(env, config=ppo_cfg)
 
 
 def train_agent(agent, timesteps):
@@ -88,9 +85,6 @@ def train_agent(agent, timesteps):
     Args:
         agent (PPOAgent): PPO agent wrapper.
         timesteps (int): Number of training timesteps.
-
-    Returns:
-        None
     """
     agent.train(timesteps)
 
@@ -102,9 +96,6 @@ def save_agent(agent, path):
     Args:
         agent (PPOAgent): PPO agent wrapper.
         path (str): Output model path.
-
-    Returns:
-        None
     """
     agent.save(path)
 
@@ -116,9 +107,6 @@ def evaluate_agent(agent, env):
     Args:
         agent (PPOAgent): PPO agent wrapper.
         env (Ros2NavEnv): Evaluation environment.
-
-    Returns:
-        None
     """
     obs, _ = env.reset()
     action = agent.evaluate(obs)
