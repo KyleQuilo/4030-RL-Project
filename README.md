@@ -76,7 +76,7 @@ ros2 topic info /cmd_vel
 ros2 topic echo /scan --once
 ros2 topic echo /odom --once
 ```
-### Phase 2 Validation Script
+## Phase 2 Validation Script
 
 With the simulator running, execute:
 ```bash
@@ -93,15 +93,15 @@ This script:
 - Confirms that the environment API is functioning correctly
 The console output from this run is included in the Phase 2 progress report as Task 1 evidence.
 
-### Configuration
+## Configuration
 Key runtime parameters are stored in config.yaml.
 
-## Topics
+### Topics
 - /scan
 - /odom
 - /cmd_vel
 
-## Environment Parameters
+### Environment Parameters
 - lidar_beams: 60
 - control_hz: 10
 - dt: 0.1
@@ -110,7 +110,7 @@ Key runtime parameters are stored in config.yaml.
 - w_max: 2.0
 - r_safe: 0.30
 
-### Code Structure
+## Code Structure
 environment.py
 ROS 2 and Gazebo to Gymnasium style environment wrapper. Handles reset, step, observation construction, and action publishing.
 
@@ -141,7 +141,7 @@ Output directory for logs, checkpoints, and training results.
 launch/
 Launch related files for simulation support.
 
-### Phase 2 Deliverable Purpose
+## Phase 2 Deliverable Purpose
 This repository supports the Phase 2 requirements by demonstrating:
 - ROS 2 and Gazebo topic connectivity
 - A valid Gymnasium style environment wrapper
@@ -149,7 +149,7 @@ This repository supports the Phase 2 requirements by demonstrating:
 - Successful environment reset and one step execution
 - A modular reinforcement learning project structure for future training
 
-### Notes
+## Notes
 - Goal related features in the observation are currently placeholders for Phase 2
 - Reward logic is currently minimal and used only to confirm interface functionality
 - Full training and navigation performance improvements will be developed in later phases
