@@ -1,3 +1,9 @@
+
+---
+
+## **2. `environment.py`**
+
+```python
 import time
 import numpy as np
 import rclpy
@@ -16,16 +22,17 @@ from utils import load_config
 
 class Ros2NavEnv(gym.Env):
     """
-    Minimal Gymnasium-style environment wrapper for TurtleBot3 in ROS 2 + Gazebo Sim.
+    Minimal Gymnasium style environment wrapper for TurtleBot3 in ROS 2 and Gazebo.
 
-    Phase 2 goal:
-    - Confirm topics work (/scan, /odom, /cmd_vel)
-    - Implement reset() and step() so training_script.py can print required API info
-    - Execute at least one successful environment step
+    Phase 2 goals:
+    1. Confirm topic connectivity for /scan, /odom, and /cmd_vel
+    2. Expose Gymnasium compatible reset() and step() methods
+    3. Provide valid observation_space and action_space definitions
+    4. Execute at least one successful environment step
 
     Notes:
-    - /cmd_vel is geometry_msgs/msg/TwistStamped in your setup
-    - Goal features are placeholders in Phase 2 until goal logic is implemented
+        Goal related features are placeholders in Phase 2.
+        The /cmd_vel topic uses geometry_msgs/msg/TwistStamped in this setup.
     """
 
     metadata = {"render_modes": []}
@@ -42,6 +49,7 @@ class Ros2NavEnv(gym.Env):
         self.cfg = load_config(config_path)
         topics = self.cfg["topics"]
         env_cfg = self.cfg["env"]
+        reward_cfg = self.cfg.get("reward", {})
 
         self.scan_topic = topics["scan"]
         self.odom_topic = topics["odom"]
@@ -49,11 +57,16 @@ class Ros2NavEnv(gym.Env):
 
         self.lidar_beams = int(env_cfg["lidar_beams"])
         self.max_range = float(env_cfg["lidar_max_range"])
+        self.control_hz = float(env_cfg["control_hz"])
         self.dt = float(env_cfg["dt"])
         self.max_steps = int(env_cfg["max_steps"])
         self.v_max = float(env_cfg["v_max"])
         self.w_max = float(env_cfg["w_max"])
+        self.r_safe = float(env_cfg["r_safe"])
 
+        self.time_penalty = float(reward_cfg.get("time_penalty", -0.5))
+
+        # Observation = lidar beams + 2 placeholder goal features + 2 velocities
         self.obs_dim = self.lidar_beams + 2 + 2
 
         self.observation_space = spaces.Box(
@@ -63,6 +76,7 @@ class Ros2NavEnv(gym.Env):
             dtype=np.float32,
         )
 
+        # Action = [linear_velocity, angular_velocity]
         self.action_space = spaces.Box(
             low=np.array([0.0, -self.w_max], dtype=np.float32),
             high=np.array([self.v_max, self.w_max], dtype=np.float32),
@@ -108,13 +122,13 @@ class Ros2NavEnv(gym.Env):
 
     def _wait_for_topics(self, timeout_sec=10.0):
         """
-        Wait until both scan and odometry messages are available.
+        Wait until both scan and odometry messages have been received.
 
         Args:
-            timeout_sec (float): Maximum wait time in seconds.
+            timeout_sec (float): Maximum time to wait in seconds.
 
         Raises:
-            RuntimeError: If required messages are not received in time.
+            RuntimeError: If required topics are not received within the timeout.
         """
         start = time.time()
         while (self._latest_scan is None or self._latest_odom is None) and (time.time() - start < timeout_sec):
@@ -125,13 +139,14 @@ class Ros2NavEnv(gym.Env):
 
     def _publish_action(self, v, w):
         """
-        Publish a velocity command.
+        Publish a velocity command to the robot.
 
         Args:
             v (float): Linear velocity command.
             w (float): Angular velocity command.
         """
         msg = TwistStamped()
+        msg.header.stamp = self.node.get_clock().now().to_msg()
         msg.twist.linear.x = float(v)
         msg.twist.angular.z = float(w)
         self.cmd_pub.publish(msg)
@@ -141,8 +156,8 @@ class Ros2NavEnv(gym.Env):
         Build the current observation vector.
 
         Returns:
-            np.ndarray: Observation containing lidar, placeholder goal features,
-            and current linear/angular velocities.
+            np.ndarray: Observation containing normalized lidar values,
+            placeholder goal features, and robot velocities.
         """
         rclpy.spin_once(self.node, timeout_sec=0.01)
 
@@ -152,6 +167,7 @@ class Ros2NavEnv(gym.Env):
             max_range=self.max_range,
         )
 
+        # Placeholder goal features for Phase 2
         goal_dist = 0.0
         goal_heading_err = 0.0
 
@@ -166,11 +182,16 @@ class Ros2NavEnv(gym.Env):
 
     def reset(self, seed=None, options=None):
         """
-        Reset environment state.
+        Reset the environment state.
+
+        Phase 2 behavior:
+            1. Stop the robot
+            2. Wait for valid sensor messages
+            3. Return the current observation
 
         Args:
             seed (int | None): Optional random seed.
-            options (dict | None): Optional reset settings.
+            options (dict | None): Optional reset arguments.
 
         Returns:
             tuple[np.ndarray, dict]: Initial observation and reset info.
@@ -189,8 +210,15 @@ class Ros2NavEnv(gym.Env):
         """
         Execute one environment step.
 
+        Phase 2 behavior:
+            1. Clip the action to valid limits
+            2. Publish the velocity command
+            3. Spin ROS callbacks during the control interval
+            4. Read the next observation
+            5. Return a placeholder reward and step info
+
         Args:
-            action (np.ndarray): Action containing linear and angular velocity commands.
+            action (np.ndarray): Action containing [linear_velocity, angular_velocity].
 
         Returns:
             tuple: Observation, reward, terminated, truncated, and info dictionary.
@@ -201,11 +229,14 @@ class Ros2NavEnv(gym.Env):
         w = float(np.clip(action[1], -self.w_max, self.w_max))
 
         self._publish_action(v, w)
-        time.sleep(self.dt)
+
+        end_time = time.time() + self.dt
+        while time.time() < end_time:
+            rclpy.spin_once(self.node, timeout_sec=0.01)
 
         obs = self._get_obs()
 
-        reward = -0.5
+        reward = self.time_penalty
         terminated = False
         truncated = self._step_count >= self.max_steps
 
