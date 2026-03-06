@@ -112,6 +112,7 @@ Key runtime parameters are stored in config.yaml.
 
 ## Code Structure
 environment.py
+
 ROS 2 and Gazebo to Gymnasium style environment wrapper. Handles reset, step, observation construction, and action publishing.
 
 sensor_processing.py
