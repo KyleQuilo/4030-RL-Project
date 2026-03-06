@@ -25,12 +25,18 @@ class Ros2NavEnv(gym.Env):
 
     Notes:
     - /cmd_vel is geometry_msgs/msg/TwistStamped in your setup
-    - Goal features are placeholders in Phase 2 (set to 0.0) until goal logic is implemented
+    - Goal features are placeholders in Phase 2 until goal logic is implemented
     """
 
     metadata = {"render_modes": []}
 
     def __init__(self, config_path="config.yaml"):
+        """
+        Initialize the ROS 2 navigation environment.
+
+        Args:
+            config_path (str): Path to the YAML configuration file.
+        """
         super().__init__()
 
         self.cfg = load_config(config_path)
@@ -48,8 +54,6 @@ class Ros2NavEnv(gym.Env):
         self.v_max = float(env_cfg["v_max"])
         self.w_max = float(env_cfg["w_max"])
 
-        # Observation: lidar_beams + 2 goal features + 2 velocities
-        # Goal features are placeholders for Phase 2.
         self.obs_dim = self.lidar_beams + 2 + 2
 
         self.observation_space = spaces.Box(
@@ -59,7 +63,6 @@ class Ros2NavEnv(gym.Env):
             dtype=np.float32,
         )
 
-        # Action: [v, w]
         self.action_space = spaces.Box(
             low=np.array([0.0, -self.w_max], dtype=np.float32),
             high=np.array([self.v_max, self.w_max], dtype=np.float32),
@@ -86,25 +89,61 @@ class Ros2NavEnv(gym.Env):
         self._wait_for_topics()
 
     def _scan_cb(self, msg: LaserScan):
+        """
+        Store the most recent LaserScan message.
+
+        Args:
+            msg (LaserScan): Incoming lidar scan message.
+        """
         self._latest_scan = msg
 
     def _odom_cb(self, msg: Odometry):
+        """
+        Store the most recent Odometry message.
+
+        Args:
+            msg (Odometry): Incoming odometry message.
+        """
         self._latest_odom = msg
 
     def _wait_for_topics(self, timeout_sec=10.0):
+        """
+        Wait until both scan and odometry messages are available.
+
+        Args:
+            timeout_sec (float): Maximum wait time in seconds.
+
+        Raises:
+            RuntimeError: If required messages are not received in time.
+        """
         start = time.time()
         while (self._latest_scan is None or self._latest_odom is None) and (time.time() - start < timeout_sec):
             rclpy.spin_once(self.node, timeout_sec=0.1)
+
         if self._latest_scan is None or self._latest_odom is None:
             raise RuntimeError("Timed out waiting for /scan and /odom messages")
 
     def _publish_action(self, v, w):
+        """
+        Publish a velocity command.
+
+        Args:
+            v (float): Linear velocity command.
+            w (float): Angular velocity command.
+        """
         msg = TwistStamped()
         msg.twist.linear.x = float(v)
         msg.twist.angular.z = float(w)
         self.cmd_pub.publish(msg)
 
     def _get_obs(self):
+        """
+        Build the current observation vector.
+
+        Returns:
+            np.ndarray: Observation containing lidar, placeholder goal features,
+            and current linear/angular velocities.
+        """
         rclpy.spin_once(self.node, timeout_sec=0.01)
 
         lidar = downsample_lidar(
@@ -113,11 +152,9 @@ class Ros2NavEnv(gym.Env):
             max_range=self.max_range,
         )
 
-        # Goal features placeholder for Phase 2
         goal_dist = 0.0
         goal_heading_err = 0.0
 
-        # Velocities from odom
         v = float(self._latest_odom.twist.twist.linear.x)
         w = float(self._latest_odom.twist.twist.angular.z)
 
@@ -130,10 +167,13 @@ class Ros2NavEnv(gym.Env):
     def reset(self, seed=None, options=None):
         """
         Reset environment state.
-        Phase 2 implementation:
-        - Stop robot
-        - Wait for sensor messages
-        - Return observation
+
+        Args:
+            seed (int | None): Optional random seed.
+            options (dict | None): Optional reset settings.
+
+        Returns:
+            tuple[np.ndarray, dict]: Initial observation and reset info.
         """
         super().reset(seed=seed)
         self._step_count = 0
@@ -142,17 +182,18 @@ class Ros2NavEnv(gym.Env):
         self._wait_for_topics()
 
         obs = self._get_obs()
-        info = {}
+        info = {"status": "reset_success"}
         return obs, info
 
     def step(self, action):
         """
         Execute one environment step.
-        Phase 2 implementation:
-        - Publish velocity command
-        - Sleep for fixed dt
-        - Read latest scan and odom
-        - Return observation and placeholder reward
+
+        Args:
+            action (np.ndarray): Action containing linear and angular velocity commands.
+
+        Returns:
+            tuple: Observation, reward, terminated, truncated, and info dictionary.
         """
         self._step_count += 1
 
@@ -160,14 +201,11 @@ class Ros2NavEnv(gym.Env):
         w = float(np.clip(action[1], -self.w_max, self.w_max))
 
         self._publish_action(v, w)
-
         time.sleep(self.dt)
 
         obs = self._get_obs()
 
-        # Placeholder reward for Phase 2 interface confirmation
         reward = -0.5
-
         terminated = False
         truncated = self._step_count >= self.max_steps
 
@@ -180,7 +218,7 @@ class Ros2NavEnv(gym.Env):
 
     def close(self):
         """
-        Stop robot and shut down ROS node cleanly.
+        Stop the robot and shut down the ROS 2 node cleanly.
         """
         try:
             self._publish_action(0.0, 0.0)
