@@ -143,16 +143,10 @@ Helper functions for configuration loading and shared utilities.
 Central configuration file containing topics and environment parameters.
 
 `ppo_results/`
-
 Output directory for logs, checkpoints, and training results.
 
 `launch/`
-
 Launch related files for simulation support.
-
-### `policy_network.py`
-
-Policy network definition for the PPO agent skeleton.
 
 ## Phase 2 Deliverable Purpose
 This repository supports the Phase 2 requirements by demonstrating:
