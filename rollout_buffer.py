@@ -9,7 +9,6 @@ document where a custom rollout buffer would be implemented if PPO were
 extended or rewritten in a later phase.
 """
 
-
 class RolloutBuffer:
     """
     Placeholder rollout buffer class for PPO style trajectory storage.
