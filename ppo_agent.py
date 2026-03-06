@@ -1,6 +1,5 @@
 from stable_baselines3 import PPO
 
-
 class PPOAgent:
     """
     Stable Baselines3 PPO wrapper for the ROS 2 navigation project.
@@ -54,8 +53,8 @@ class PPOAgent:
 
         Args:
             observation: Current environment observation.
-            deterministic (bool): If True, use exploitation mode. If False,
-                allow the policy's stochastic behavior for training.
+            deterministic (bool): If True, use deterministic inference.
+                If False, use the policy's default stochastic behavior.
 
         Returns:
             action: Action selected by the PPO policy.
