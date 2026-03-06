@@ -35,3 +35,14 @@ Install the required Python packages with:
 
 ```bash
 pip install -r requirements.txt
+
+## ROS Packages
+
+TurtleBot3 packages for ROS 2 Jazzy and the required simulation packages must be installed separately using `apt`.
+
+## Setup
+
+### 1. Source ROS 2
+
+```bash
+source /opt/ros/jazzy/setup.bash
