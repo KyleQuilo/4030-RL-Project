@@ -111,35 +111,33 @@ Key runtime parameters are stored in config.yaml.
 - r_safe: 0.30
 
 ## Code Structure
-environment.py
-
+`environment.py`
 ROS 2 and Gazebo to Gymnasium style environment wrapper. Handles reset, step, observation construction, and action publishing.
-
-sensor_processing.py
+`sensor_processing.py`
 Utilities for LiDAR downsampling and observation preprocessing.
 
-ppo_agent.py
+`ppo_agent.py`
 Baseline PPO agent structure for reinforcement learning development.
 
-policy_network.py
+`policy_network.py`
 Policy network definition for the PPO agent skeleton.
 
-rollout_buffer.py
+`rollout_buffer.py`
 Experience storage structure for PPO rollouts.
 
-training_script.py
+`training_script.py`
 Phase 2 validation script used to confirm the environment API and execute one successful environment step.
 
-utils.py
+`utils.py`
 Helper functions for configuration loading and shared utilities.
 
-config.yaml
+`config.yaml`
 Central configuration file containing topics and environment parameters.
 
-ppo_results/
+`ppo_results/`
 Output directory for logs, checkpoints, and training results.
 
-launch/
+`launch/`
 Launch related files for simulation support.
 
 ## Phase 2 Deliverable Purpose
