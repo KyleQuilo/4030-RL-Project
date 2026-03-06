@@ -43,7 +43,9 @@ TurtleBot3 packages for ROS 2 Jazzy and the required simulation packages must be
 source /opt/ros/jazzy/setup.bash
 ```
 
-### Hello 
+### Optional: Make the TurtleBot3 model permanent
+echo "export TURTLEBOT3_MODEL=burger" >> ~/.bashrc
+source ~/.bashrc
 
 
 
