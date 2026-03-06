@@ -76,7 +76,7 @@ ros2 topic info /cmd_vel
 ros2 topic echo /scan --once
 ros2 topic echo /odom --once
 ```
-Phase 2 Validation Script
+### Phase 2 Validation Script
 
 With the simulator running, execute:
 ```bash
