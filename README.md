@@ -43,13 +43,6 @@ TurtleBot3 packages for ROS 2 Jazzy and the required simulation packages must be
 source /opt/ros/jazzy/setup.bash
 ```
 
-````markdown
-### 1. Source ROS 2
-
-```bash
-source /opt/ros/jazzy/setup.bash
-```
-
 ### Hello 
 
 
