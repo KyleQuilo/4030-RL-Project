@@ -1,6 +1,15 @@
 import yaml
 
+
 def load_config(path="config.yaml"):
-    """Load YAML config file into a Python dict."""
-    with open(path, "r") as f:
-        return yaml.safe_load(f)
+    """
+    Load a YAML configuration file into a Python dictionary.
+
+    Args:
+        path (str): Path to the YAML configuration file.
+
+    Returns:
+        dict: Parsed configuration dictionary.
+    """
+    with open(path, "r", encoding="utf-8") as file:
+        return yaml.safe_load(file)
