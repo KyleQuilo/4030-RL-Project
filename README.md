@@ -31,7 +31,7 @@ Phase 2 focuses on confirming that the custom environment exposes the required r
 - pyyaml
 - torch
 
-## ROS Packages
+### ROS Packages
 
 TurtleBot3 packages for ROS 2 Jazzy and the required simulation packages must be installed separately using `apt`.
 
