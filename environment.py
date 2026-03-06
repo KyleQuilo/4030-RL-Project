@@ -1,9 +1,3 @@
-
----
-
-## **2. `environment.py`**
-
-```python
 import time
 import numpy as np
 import rclpy
@@ -66,7 +60,6 @@ class Ros2NavEnv(gym.Env):
 
         self.time_penalty = float(reward_cfg.get("time_penalty", -0.5))
 
-        # Observation = lidar beams + 2 placeholder goal features + 2 velocities
         self.obs_dim = self.lidar_beams + 2 + 2
 
         self.observation_space = spaces.Box(
@@ -76,7 +69,6 @@ class Ros2NavEnv(gym.Env):
             dtype=np.float32,
         )
 
-        # Action = [linear_velocity, angular_velocity]
         self.action_space = spaces.Box(
             low=np.array([0.0, -self.w_max], dtype=np.float32),
             high=np.array([self.v_max, self.w_max], dtype=np.float32),
@@ -167,7 +159,6 @@ class Ros2NavEnv(gym.Env):
             max_range=self.max_range,
         )
 
-        # Placeholder goal features for Phase 2
         goal_dist = 0.0
         goal_heading_err = 0.0
 
@@ -183,11 +174,6 @@ class Ros2NavEnv(gym.Env):
     def reset(self, seed=None, options=None):
         """
         Reset the environment state.
-
-        Phase 2 behavior:
-            1. Stop the robot
-            2. Wait for valid sensor messages
-            3. Return the current observation
 
         Args:
             seed (int | None): Optional random seed.
@@ -209,13 +195,6 @@ class Ros2NavEnv(gym.Env):
     def step(self, action):
         """
         Execute one environment step.
-
-        Phase 2 behavior:
-            1. Clip the action to valid limits
-            2. Publish the velocity command
-            3. Spin ROS callbacks during the control interval
-            4. Read the next observation
-            5. Return a placeholder reward and step info
 
         Args:
             action (np.ndarray): Action containing [linear_velocity, angular_velocity].
