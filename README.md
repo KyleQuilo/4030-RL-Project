@@ -150,6 +150,10 @@ Output directory for logs, checkpoints, and training results.
 
 Launch related files for simulation support.
 
+### `policy_network.py`
+
+Policy network definition for the PPO agent skeleton.
+
 ## Phase 2 Deliverable Purpose
 This repository supports the Phase 2 requirements by demonstrating:
 - ROS 2 and Gazebo topic connectivity
