@@ -42,20 +42,25 @@ TurtleBot3 packages for ROS 2 Jazzy and the required simulation packages must be
 source /opt/ros/jazzy/setup.bash
 ```
 
+### 2. Set the TurtleBot3 model
+```bash
+export TURTLEBOT3_MODEL=burger
+```
+
 ### Optional: Make the TurtleBot3 model permanent
 ```bash
 echo "export TURTLEBOT3_MODEL=burger" >> ~/.bashrc
 source ~/.bashrc
 ```
 
-### Launch Simulation
+## Launch Simulation
 Open a terminal and launch the TurtleBot3 Gazebo world:
 ```bash
 ros2 launch turtlebot3_gazebo turtlebot3_world.launch.py
 ```
 Leave this terminal running while performing the remaining checks.
 
-### Verify ROS Topics
+## Verify ROS Topics
 In a second terminal, verify the required ROS topics:
 ```bash
 ros2 topic list
@@ -64,14 +69,14 @@ ros2 topic info /odom
 ros2 topic info /cmd_vel
 ```
 
-## Expected Topics
+### Expected Topics
 ```bash
 /scan publishes sensor_msgs/msg/LaserScan
 /odom publishes nav_msgs/msg/Odometry
 /cmd_vel uses geometry_msgs/msg/TwistStamped
 ```
 
-## Optional Sensor Sanity Checks
+### Optional Sensor Sanity Checks
 ```bash
 ros2 topic echo /scan --once
 ros2 topic echo /odom --once
