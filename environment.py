@@ -1,4 +1,5 @@
 import math
+import subprocess
 import time
 import numpy as np
 import rclpy
@@ -207,6 +208,31 @@ class Ros2NavEnv(gym.Env):
         msg.twist.angular.z = float(w)
         self.cmd_pub.publish(msg)
 
+    def _reset_gazebo(self):
+        """
+        Reset the Gazebo world to its initial state via gz service.
+
+        Teleports the robot back to its spawn position so each episode starts
+        from a clean state. Failures are silently ignored so the environment
+        degrades gracefully if the service is unavailable.
+        """
+        try:
+            subprocess.run(
+                [
+                    "gz", "service",
+                    "-s", "/world/turtlebot3_world/control",
+                    "--reqtype", "gz.msgs.WorldControl",
+                    "--reptype", "gz.msgs.Boolean",
+                    "--timeout", "3000",
+                    "--req", "reset: {all: true}",
+                ],
+                timeout=5.0,
+                capture_output=True,
+            )
+        except Exception:
+            pass
+        time.sleep(1.0)
+
     def _sample_goal(self):
         """
         Sample a random goal position relative to the robot's current pose.
@@ -331,6 +357,13 @@ class Ros2NavEnv(gym.Env):
         self._prev_dist = None
 
         self._publish_action(0.0, 0.0)
+
+        # Reset Gazebo so the robot returns to its spawn position.
+        # Flush cached sensor data so _wait_for_topics() collects fresh
+        # readings from the reset position rather than the old pose.
+        self._latest_scan = None
+        self._latest_odom = None
+        self._reset_gazebo()
         self._wait_for_topics()
 
         self._sample_goal()
