@@ -376,7 +376,14 @@ class Ros2NavEnv(gym.Env):
         obs = self._get_obs()
 
         dist, heading_err = self._get_goal_relative()
-        r_min = float(min(self._latest_scan.ranges)) if self._latest_scan else self.max_range
+        # Filter out invalid LiDAR readings: TurtleBot3 returns 0.0 for beams
+        # below the sensor's minimum range (~0.12 m) and inf for no-return beams.
+        # Using raw min() would always yield 0.0, falsely triggering collision.
+        if self._latest_scan:
+            valid = [r for r in self._latest_scan.ranges if 0.0 < r < float("inf")]
+            r_min = float(min(valid)) if valid else self.max_range
+        else:
+            r_min = self.max_range
 
         reward, terminated, reason = self._compute_reward(dist, heading_err, r_min)
 
