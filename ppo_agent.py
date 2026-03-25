@@ -34,6 +34,7 @@ class PPOAgent:
         self.ent_coef = self.config.get("ent_coef", 0.0)
         self.clip_range = self.config.get("clip_range", 0.2)
         self.verbose = self.config.get("verbose", 1)
+        self.device = self.config.get("device", "cpu")
 
         self.model = PPO(
             self.policy,
@@ -45,6 +46,7 @@ class PPOAgent:
             learning_rate=self.learning_rate,
             ent_coef=self.ent_coef,
             clip_range=self.clip_range,
+            device=self.device,
         )
 
     def select_action(self, observation, deterministic=False):
@@ -62,14 +64,16 @@ class PPOAgent:
         action, _ = self.model.predict(observation, deterministic=deterministic)
         return action
 
-    def train(self, timesteps):
+    def train(self, timesteps, callback=None):
         """
         Train the PPO agent.
 
         Args:
             timesteps (int): Total number of training timesteps.
+            callback: Optional SB3 callback or callback list for logging and
+                checkpointing during training.
         """
-        self.model.learn(total_timesteps=timesteps)
+        self.model.learn(total_timesteps=timesteps, callback=callback)
 
     def update(self):
         """

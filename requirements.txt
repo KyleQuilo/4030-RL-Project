@@ -2,4 +2,19 @@ gymnasium
 stable-baselines3
 numpy
 pyyaml
+matplotlib
+pandas
+# PyTorch: install the correct build for your hardware.
+#
+# CUDA 12.1 (NVIDIA GPU — Option B local machine):
+#   pip install torch --index-url https://download.pytorch.org/whl/cu121
+#
+# CUDA 11.8:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu118
+#
+# CPU only (no GPU):
+#   pip install torch
+#
+# Verify GPU is visible after install:
+#   python3 -c "import torch; print(torch.cuda.is_available())"
 torch

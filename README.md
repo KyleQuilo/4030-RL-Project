@@ -1,13 +1,16 @@
 # 4030 RL Project
 
-## ROS 2 Navigation Reinforcement Learning Environment  
-**AISE 4030 Phase 2**
+## Safe RL Navigation for TurtleBot3 — PPO vs SAC
+**AISE 4030 Phase 3 | RL Group 10**
 
 ## Project Summary
 
-This project implements a ROS 2 and Gazebo mobile robot navigation environment wrapped in a Gymnasium style API for reinforcement learning. The TurtleBot3 Burger robot is controlled using continuous velocity commands and observes the environment using simulated 2D LiDAR and odometry.
+This project trains a TurtleBot3 Burger robot to autonomously navigate to goal positions while avoiding obstacles in Gazebo, using ROS 2 as the robot middleware. Two reinforcement learning algorithms are implemented and compared:
 
-Phase 2 focuses on confirming that the custom environment exposes the required reinforcement learning interface and that the robot simulation can successfully provide observations and accept actions. A baseline PPO structure is also included for later development.
+- **PPO** (Proximal Policy Optimization) — on-policy baseline
+- **SAC** (Soft Actor-Critic) — off-policy advanced algorithm
+
+The environment is wrapped in a Gymnasium-compatible API. Both agents are trained with identical observation spaces, reward functions, and evaluation protocols so performance differences reflect algorithm choice rather than implementation differences.
 
 ## System Requirements
 
@@ -15,25 +18,32 @@ Phase 2 focuses on confirming that the custom environment exposes the required r
 - ROS 2 Jazzy
 - Gazebo Sim
 - Python 3.10 or later
+- NVIDIA GPU recommended for full training runs (CPU sufficient for short test runs)
 
-## Recommended Hardware
+## Python Dependencies
 
-- CPU is sufficient for Phase 2 validation
-- GPU is optional for later training experiments
+Install all required packages:
+```bash
+pip install -r requirements.txt
+```
 
-## Dependencies
+Contents of `requirements.txt`:
+```
+gymnasium
+stable-baselines3
+numpy
+pyyaml
+torch
+matplotlib
+pandas
+```
 
-### Python Packages
+## ROS Packages
 
-- gymnasium
-- stable baselines3
-- numpy
-- pyyaml
-- torch
-
-### ROS Packages
-
-TurtleBot3 packages for ROS 2 Jazzy and the required simulation packages must be installed separately using `apt`.
+TurtleBot3 packages for ROS 2 Jazzy must be installed via `apt`:
+```bash
+sudo apt install ros-jazzy-turtlebot3* ros-jazzy-turtlebot3-gazebo
+```
 
 ## Setup
 
@@ -47,21 +57,13 @@ source /opt/ros/jazzy/setup.bash
 export TURTLEBOT3_MODEL=burger
 ```
 
-### Optional: Make the TurtleBot3 model permanent
-```bash
-echo "export TURTLEBOT3_MODEL=burger" >> ~/.bashrc
-source ~/.bashrc
-```
-
-## Launch Simulation
-Open a terminal and launch the TurtleBot3 Gazebo world:
+### 3. Launch the Gazebo simulation
 ```bash
 ros2 launch turtlebot3_gazebo turtlebot3_world.launch.py
 ```
-Leave this terminal running while performing the remaining checks.
+Leave this terminal running for all subsequent commands.
 
-## Verify ROS Topics
-In a second terminal, verify the required ROS topics:
+### 4. Verify ROS topics
 ```bash
 ros2 topic list
 ros2 topic info /scan
@@ -69,102 +71,172 @@ ros2 topic info /odom
 ros2 topic info /cmd_vel
 ```
 
-### Expected Topics
+## Compute Options
+
+### Option B: Local Machine with NVIDIA GPU (recommended)
+
+If your machine has an NVIDIA GPU, train locally for full control and no session timeouts.
+
+**Requirements:**
+- Correct NVIDIA drivers installed
+- CUDA toolkit installed (matching your PyTorch build)
+- cuDNN installed
+- PyTorch built with CUDA support (`pip install torch --index-url https://download.pytorch.org/whl/cu121`)
+
+**Verify CUDA is available:**
 ```bash
-/scan publishes sensor_msgs/msg/LaserScan
-/odom publishes nav_msgs/msg/Odometry
-/cmd_vel uses geometry_msgs/msg/TwistStamped
+python3 -c "import torch; print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0))"
 ```
 
-### Optional Sensor Sanity Checks
-```bash
-ros2 topic echo /scan --once
-ros2 topic echo /odom --once
-```
-## Phase 2 Validation Script
+**Enable GPU training** by setting `device: cuda` in `config.yaml` under the `training` section (this is already the default). Change to `device: cpu` if no GPU is available.
 
-With the simulator running, execute:
+### Option A: CPU-Only
+
+Set `device: cpu` in `config.yaml`. Suitable for short test runs but will be slow for 500k timesteps.
+
+---
+
+## Running Training
+
+With Gazebo running, open a second terminal:
+
+### Train both PPO and SAC (recommended)
 ```bash
-python3 training_script.py
+python3 training_script.py --algo both
 ```
-This script:
-- Instantiates the environment
-- Prints the observation space
-- Prints the action space
-- Prints the selected device
-- Performs an environment reset
-- Executes one environment step
-- Prints the reward and termination flags
-- Confirms that the environment API is functioning correctly
-The console output from this run is included in the Phase 2 progress report as Task 1 evidence.
+
+### Train PPO only
+```bash
+python3 training_script.py --algo ppo
+```
+
+### Train SAC only
+```bash
+python3 training_script.py --algo sac
+```
+
+Training outputs are saved to `ppo_results/` and `sac_results/` respectively, including:
+- Model checkpoints every 50,000 steps
+- Best model checkpoint (`best_model.zip`)
+- Per-episode metrics CSV (`metrics.csv`)
+
+## Evaluating Trained Agents
+
+```bash
+python3 training_script.py --algo both --eval-only --n-eval-episodes 50
+```
+
+This loads saved models from `ppo_results/ppo_model.zip` and `sac_results/sac_model.zip` and runs them in deterministic (exploitation-only) mode.
+
+## Generating Comparison Plots
+
+After training completes:
+```bash
+python3 plot_results.py
+```
+
+Plots are saved to `plots/`:
+- `reward_curves.png` — learning speed comparison
+- `loss_curves.png` — loss convergence comparison
+- `stability.png` — rolling reward standard deviation
+- `exploration.png` — entropy parameter schedule
+- `final_performance.png` — mean ± std bar chart
+
+Custom paths:
+```bash
+python3 plot_results.py --ppo-csv ppo_results/metrics.csv \
+                         --sac-csv sac_results/metrics.csv \
+                         --out-dir plots/
+```
+
+## Reproducing Results
+
+All hyperparameters and training settings are stored in `config.yaml`. To reproduce a training run exactly:
+
+1. Ensure `training.seed: 42` (or set to your desired seed) in `config.yaml`
+2. Use the same ROS 2 and Gazebo world (`turtlebot3_world`)
+3. Run `python3 training_script.py --algo both`
+
+Key reproducibility settings in `config.yaml`:
+- `training.seed: 42`
+- `training.ppo_timesteps: 500000`
+- `training.sac_timesteps: 500000`
 
 ## Configuration
-Key runtime parameters are stored in config.yaml.
 
-### Topics
-- /scan
-- /odom
-- /cmd_vel
+All parameters are in `config.yaml`. Key sections:
 
-### Environment Parameters
-- lidar_beams: 60
-- control_hz: 10
-- dt: 0.1
-- max_steps: 600
-- v_max: 0.22
-- w_max: 2.0
-- r_safe: 0.30
+| Section | Description |
+|---|---|
+| `env` | LiDAR beams, control rate, episode length, velocity limits |
+| `goal` | Goal distance range, success tolerances |
+| `reward` | All reward coefficients from Phase 1 MDP design |
+| `ppo` | PPO hyperparameters (gamma, n_steps, lr, clip_range, etc.) |
+| `sac` | SAC hyperparameters (buffer_size, tau, ent_coef, etc.) |
+| `training` | Timesteps, eval frequency, checkpoint frequency, seed |
+| `paths` | Output paths for models, logs, and metrics CSVs |
+
+## Reward Function
+
+The reward function implements the Phase 1 MDP design:
+
+| Component | Value | Condition |
+|---|---|---|
+| Progress shaping | `+10 × (d_prev − d_curr)` | Every step |
+| Time penalty | `−0.5` | Every step |
+| Safety margin | `−2.0` | When min LiDAR range < 0.30 m |
+| Success | `+200` | Distance < 0.25 m and heading < 15° |
+| Collision | `−200` | Min LiDAR range < 0.20 m |
+| Timeout | `−50` | Episode reaches max_steps (600) |
+
+## Observation Space (64-dim)
+
+| Index | Feature |
+|---|---|
+| 0–59 | Normalized LiDAR beams (60 beams, range [0, 1]) |
+| 60 | Normalized distance to goal (dist / 5.0) |
+| 61 | Normalized heading error to goal (radians / π) |
+| 62 | Current linear velocity (m/s) |
+| 63 | Current angular velocity (rad/s) |
+
+## Action Space (2-dim)
+
+| Index | Action | Range |
+|---|---|---|
+| 0 | Linear velocity v | [0.0, 0.22] m/s |
+| 1 | Angular velocity w | [−2.0, 2.0] rad/s |
 
 ## Code Structure
-`environment.py`
 
-ROS 2 and Gazebo to Gymnasium style environment wrapper. Handles reset, step, observation construction, and action publishing.
+| File | Description |
+|---|---|
+| `environment.py` | Gymnasium environment wrapper — ROS 2 topics, full reward, goal logic |
+| `sensor_processing.py` | LiDAR downsampling and normalization |
+| `ppo_agent.py` | PPO baseline agent (SB3 wrapper) |
+| `sac_agent.py` | SAC advanced agent (SB3 wrapper) |
+| `policy_network.py` | Policy network interface documentation (SB3 MlpPolicy used) |
+| `rollout_buffer.py` | Buffer interface documentation (SB3 buffers used) |
+| `training_script.py` | Training loop, callbacks, CSV logging, evaluation |
+| `plot_results.py` | Comparison plots for Phase 3 report |
+| `utils.py` | YAML config loader |
+| `config.yaml` | All hyperparameters and paths |
+| `requirements.txt` | Python package dependencies |
+| `ppo_results/` | PPO training outputs (models, metrics CSV, checkpoints) |
+| `sac_results/` | SAC training outputs (models, metrics CSV, checkpoints) |
+| `plots/` | Generated comparison figures |
+| `launch/` | ROS 2 launch file references |
 
-`sensor_processing.py`
+## Google Colab Training
 
-Utilities for LiDAR downsampling and observation preprocessing.
+To train on Colab (free T4 GPU):
 
-`ppo_agent.py`
-
-Baseline PPO agent structure for reinforcement learning development.
-
-`policy_network.py`
-
-Policy network definition for the PPO agent skeleton.
-
-`rollout_buffer.py`
-
-Experience storage structure for PPO rollouts.
-
-`training_script.py`
-
-Phase 2 validation script used to confirm the environment API and execute one successful environment step.
-
-`utils.py`
-
-Helper functions for configuration loading and shared utilities.
-
-`config.yaml`
-
-Central configuration file containing topics and environment parameters.
-
-`ppo_results/`
-
-Output directory for logs, checkpoints, and training results.
-
-`launch/`
-
-Launch related files for simulation support.
-
-## Phase 2 Deliverable Purpose
-This repository supports the Phase 2 requirements by demonstrating:
-- ROS 2 and Gazebo topic connectivity
-- A valid Gymnasium style environment wrapper
-- Defined observation and action spaces
-- Successful environment reset and one step execution
-- A modular reinforcement learning project structure for future training
-
-## Notes
-- Goal related features in the observation are currently placeholders for Phase 2
-- Reward logic is currently minimal and used only to confirm interface functionality
-- Full training and navigation performance improvements will be developed in later phases
+1. Upload the project folder to Google Drive
+2. Open a new Colab notebook, select Runtime → T4 GPU
+3. In the first cell:
+```python
+from google.colab import drive
+drive.mount('/content/drive')
+%cd /content/drive/MyDrive/4030-RL-Project/
+!pip install -r requirements.txt
+```
+4. Note: ROS 2 and Gazebo cannot run in Colab. For Colab training, the environment must be adapted to a standard Gymnasium environment (e.g., by mocking the ROS layer or using a local simulation with a bridge).

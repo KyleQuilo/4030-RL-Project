@@ -1,3 +1,4 @@
+import math
 import time
 import numpy as np
 import rclpy
@@ -16,17 +17,36 @@ from utils import load_config
 
 class Ros2NavEnv(gym.Env):
     """
-    Minimal Gymnasium style environment wrapper for TurtleBot3 in ROS 2 and Gazebo.
+    Gymnasium-compatible environment wrapper for TurtleBot3 navigation in ROS 2 and Gazebo.
 
-    Phase 2 goals:
-    1. Confirm topic connectivity for /scan, /odom, and /cmd_vel
-    2. Expose Gymnasium compatible reset() and step() methods
-    3. Provide valid observation_space and action_space definitions
-    4. Execute at least one successful environment step
+    The robot must navigate to a randomly sampled goal position while avoiding
+    obstacles detected via simulated 2D LiDAR. This environment implements the
+    full MDP defined in Phase 1, including goal-relative observations, dense
+    reward shaping, collision detection via LiDAR, and episode termination on
+    success, collision, or timeout.
+
+    Observation space (64-dim float32):
+        [0:60]  Normalized LiDAR beams (60 beams, range [0, 1])
+        [60]    Normalized distance to goal (distance / goal_norm_dist)
+        [61]    Normalized heading error to goal (radians / pi, range [-1, 1])
+        [62]    Current linear velocity (m/s)
+        [63]    Current angular velocity (rad/s)
+
+    Action space (2-dim float32):
+        [0]  Linear velocity v in [0.0, v_max] m/s
+        [1]  Angular velocity w in [-w_max, w_max] rad/s
+
+    Reward function (per step):
+        +10 * (d_prev - d_curr)  progress shaping toward goal
+        -0.5                     time penalty per step
+        -2.0                     safety margin penalty if r_min < r_safe
+        +200 / -200 / -50        terminal reward for success / collision / timeout
 
     Notes:
-        Goal related features are placeholders in Phase 2.
-        The /cmd_vel topic uses geometry_msgs/msg/TwistStamped in this setup.
+        Goal positions are sampled randomly within [goal_min_dist, goal_max_dist]
+        from the robot's pose at episode start. Collision is detected when the
+        minimum LiDAR range falls below collision_dist. The /cmd_vel topic uses
+        geometry_msgs/msg/TwistStamped in this configuration.
     """
 
     metadata = {"render_modes": []}
@@ -44,11 +64,14 @@ class Ros2NavEnv(gym.Env):
         topics = self.cfg["topics"]
         env_cfg = self.cfg["env"]
         reward_cfg = self.cfg.get("reward", {})
+        goal_cfg = self.cfg.get("goal", {})
 
+        # ROS topic names
         self.scan_topic = topics["scan"]
         self.odom_topic = topics["odom"]
         self.cmd_topic = topics["cmd_vel"]
 
+        # Environment parameters
         self.lidar_beams = int(env_cfg["lidar_beams"])
         self.max_range = float(env_cfg["lidar_max_range"])
         self.control_hz = float(env_cfg["control_hz"])
@@ -58,9 +81,24 @@ class Ros2NavEnv(gym.Env):
         self.w_max = float(env_cfg["w_max"])
         self.r_safe = float(env_cfg["r_safe"])
 
+        # Reward parameters
         self.time_penalty = float(reward_cfg.get("time_penalty", -0.5))
+        self.safety_penalty = float(reward_cfg.get("safety_penalty", -2.0))
+        self.success_reward = float(reward_cfg.get("success_reward", 200.0))
+        self.collision_reward = float(reward_cfg.get("collision_reward", -200.0))
+        self.timeout_reward = float(reward_cfg.get("timeout_reward", -50.0))
+        self.progress_scale = float(reward_cfg.get("progress_scale", 10.0))
+        self.collision_dist = float(reward_cfg.get("collision_dist", 0.20))
 
-        self.obs_dim = self.lidar_beams + 2 + 2
+        # Goal parameters
+        self.goal_min_dist = float(goal_cfg.get("min_dist", 1.0))
+        self.goal_max_dist = float(goal_cfg.get("max_dist", 3.0))
+        self.goal_tol_dist = float(goal_cfg.get("tol_dist", 0.25))
+        self.goal_tol_heading = float(goal_cfg.get("tol_heading_deg", 15.0)) * math.pi / 180.0
+        self.goal_norm_dist = float(goal_cfg.get("norm_dist", 5.0))
+
+        # Observation and action spaces
+        self.obs_dim = self.lidar_beams + 2 + 2  # lidar + goal_dist + goal_heading + v + w
 
         self.observation_space = spaces.Box(
             low=-np.inf,
@@ -76,10 +114,24 @@ class Ros2NavEnv(gym.Env):
             dtype=np.float32,
         )
 
+        # Internal state
         self._latest_scan = None
         self._latest_odom = None
         self._step_count = 0
 
+        # Robot pose (updated from odometry)
+        self._robot_x = 0.0
+        self._robot_y = 0.0
+        self._robot_yaw = 0.0
+
+        # Goal position in world frame
+        self._goal_x = 0.0
+        self._goal_y = 0.0
+
+        # Previous distance to goal for progress shaping
+        self._prev_dist = None
+
+        # ROS 2 setup
         if not rclpy.ok():
             rclpy.init(args=None)
 
@@ -105,12 +157,20 @@ class Ros2NavEnv(gym.Env):
 
     def _odom_cb(self, msg: Odometry):
         """
-        Store the most recent Odometry message.
+        Store the most recent Odometry message and extract robot pose.
 
         Args:
-            msg (Odometry): Incoming odometry message.
+            msg (Odometry): Incoming odometry message containing pose and twist.
         """
         self._latest_odom = msg
+        self._robot_x = float(msg.pose.pose.position.x)
+        self._robot_y = float(msg.pose.pose.position.y)
+
+        q = msg.pose.pose.orientation
+        self._robot_yaw = math.atan2(
+            2.0 * (q.w * q.z + q.x * q.y),
+            1.0 - 2.0 * (q.y * q.y + q.z * q.z),
+        )
 
     def _wait_for_topics(self, timeout_sec=10.0):
         """
@@ -123,7 +183,9 @@ class Ros2NavEnv(gym.Env):
             RuntimeError: If required topics are not received within the timeout.
         """
         start = time.time()
-        while (self._latest_scan is None or self._latest_odom is None) and (time.time() - start < timeout_sec):
+        while (self._latest_scan is None or self._latest_odom is None) and (
+            time.time() - start < timeout_sec
+        ):
             rclpy.spin_once(self.node, timeout_sec=0.1)
 
         if self._latest_scan is None or self._latest_odom is None:
@@ -134,8 +196,8 @@ class Ros2NavEnv(gym.Env):
         Publish a velocity command to the robot.
 
         Args:
-            v (float): Linear velocity command.
-            w (float): Angular velocity command.
+            v (float): Linear velocity command in m/s.
+            w (float): Angular velocity command in rad/s.
         """
         msg = TwistStamped()
         msg.header.stamp = self.node.get_clock().now().to_msg()
@@ -143,13 +205,46 @@ class Ros2NavEnv(gym.Env):
         msg.twist.angular.z = float(w)
         self.cmd_pub.publish(msg)
 
-    def _get_obs(self):
+    def _sample_goal(self):
         """
-        Build the current observation vector.
+        Sample a random goal position relative to the robot's current pose.
+
+        The goal is placed at a random distance within [goal_min_dist, goal_max_dist]
+        and a random angle in [-pi, pi] relative to the robot's current heading.
+        """
+        dist = self.np_random.uniform(self.goal_min_dist, self.goal_max_dist)
+        angle = self.np_random.uniform(-math.pi, math.pi)
+        self._goal_x = self._robot_x + dist * math.cos(self._robot_yaw + angle)
+        self._goal_y = self._robot_y + dist * math.sin(self._robot_yaw + angle)
+
+    def _get_goal_relative(self):
+        """
+        Compute distance and heading error to the goal in the robot frame.
 
         Returns:
-            np.ndarray: Observation containing normalized lidar values,
-            placeholder goal features, and robot velocities.
+            tuple[float, float]: Distance to goal (m) and heading error (radians),
+                where heading error is in [-pi, pi].
+        """
+        dx = self._goal_x - self._robot_x
+        dy = self._goal_y - self._robot_y
+        dist = math.sqrt(dx * dx + dy * dy)
+
+        angle_to_goal = math.atan2(dy, dx)
+        heading_err = angle_to_goal - self._robot_yaw
+        # Normalize to [-pi, pi]
+        heading_err = math.atan2(math.sin(heading_err), math.cos(heading_err))
+
+        return dist, heading_err
+
+    def _get_obs(self):
+        """
+        Build the current observation vector from LiDAR, goal state, and velocity.
+
+        Returns:
+            np.ndarray: Observation vector of shape (obs_dim,) with dtype float32.
+                Indices [0:60] are normalized LiDAR beams, [60] is normalized
+                goal distance, [61] is normalized heading error, [62] is linear
+                velocity, and [63] is angular velocity.
         """
         rclpy.spin_once(self.node, timeout_sec=0.01)
 
@@ -159,48 +254,111 @@ class Ros2NavEnv(gym.Env):
             max_range=self.max_range,
         )
 
-        goal_dist = 0.0
-        goal_heading_err = 0.0
+        dist, heading_err = self._get_goal_relative()
+        goal_dist_norm = np.clip(dist / self.goal_norm_dist, 0.0, 1.0)
+        goal_heading_norm = heading_err / math.pi  # in [-1, 1]
 
         v = float(self._latest_odom.twist.twist.linear.x)
         w = float(self._latest_odom.twist.twist.angular.z)
 
         obs = np.concatenate(
-            [lidar, np.array([goal_dist, goal_heading_err, v, w], dtype=np.float32)],
+            [lidar, np.array([goal_dist_norm, goal_heading_norm, v, w], dtype=np.float32)],
             axis=0,
         )
         return obs.astype(np.float32)
 
-    def reset(self, seed=None, options=None):
+    def _compute_reward(self, dist, heading_err, r_min):
         """
-        Reset the environment state.
+        Compute the step reward, termination flag, and terminal bonus/penalty.
+
+        Applies progress shaping, time penalty, and safety margin penalty each
+        step. Returns terminal reward components separately so the caller can
+        combine them and set terminated/truncated flags correctly.
 
         Args:
-            seed (int | None): Optional random seed.
-            options (dict | None): Optional reset arguments.
+            dist (float): Current distance to goal in metres.
+            heading_err (float): Current heading error in radians.
+            r_min (float): Minimum LiDAR range reading at this step.
 
         Returns:
-            tuple[np.ndarray, dict]: Initial observation and reset info.
+            tuple[float, bool, str]: (reward, terminated, reason) where reason
+                is one of "success", "collision", or "" (not terminated).
+        """
+        reward = 0.0
+
+        # Progress shaping: reward for moving closer to goal
+        if self._prev_dist is not None:
+            reward += self.progress_scale * (self._prev_dist - dist)
+
+        # Time penalty every step
+        reward += self.time_penalty
+
+        # Safety margin penalty: discourage proximity to obstacles
+        if r_min < self.r_safe:
+            reward += self.safety_penalty
+
+        # Success: reached goal within position and heading tolerance
+        if dist < self.goal_tol_dist and abs(heading_err) < self.goal_tol_heading:
+            reward += self.success_reward
+            return reward, True, "success"
+
+        # Collision: LiDAR range below collision threshold
+        if r_min < self.collision_dist:
+            reward += self.collision_reward
+            return reward, True, "collision"
+
+        return reward, False, ""
+
+    def reset(self, seed=None, options=None):
+        """
+        Reset the environment for a new episode.
+
+        Stops the robot, waits for fresh sensor data, samples a new goal
+        position, and returns the initial observation.
+
+        Args:
+            seed (int | None): Optional random seed for goal sampling.
+            options (dict | None): Optional reset arguments (unused).
+
+        Returns:
+            tuple[np.ndarray, dict]: Initial observation and info dictionary
+                containing the goal position and episode start status.
         """
         super().reset(seed=seed)
         self._step_count = 0
+        self._prev_dist = None
 
         self._publish_action(0.0, 0.0)
         self._wait_for_topics()
 
+        self._sample_goal()
+
+        dist, _ = self._get_goal_relative()
+        self._prev_dist = dist
+
         obs = self._get_obs()
-        info = {"status": "reset_success"}
+        info = {
+            "status": "reset_success",
+            "goal_x": self._goal_x,
+            "goal_y": self._goal_y,
+        }
         return obs, info
 
     def step(self, action):
         """
         Execute one environment step.
 
+        Clips the action to valid bounds, publishes the velocity command,
+        waits one control period, collects observations, and computes reward
+        with full Phase 1 reward shaping.
+
         Args:
-            action (np.ndarray): Action containing [linear_velocity, angular_velocity].
+            action (np.ndarray): Action [linear_velocity, angular_velocity].
 
         Returns:
-            tuple: Observation, reward, terminated, truncated, and info dictionary.
+            tuple[np.ndarray, float, bool, bool, dict]: Observation, reward,
+                terminated flag, truncated flag, and info dictionary containing
+                step count, velocity commands, goal distance, and episode outcome.
         """
         self._step_count += 1
 
@@ -215,14 +373,25 @@ class Ros2NavEnv(gym.Env):
 
         obs = self._get_obs()
 
-        reward = self.time_penalty
-        terminated = False
-        truncated = self._step_count >= self.max_steps
+        dist, heading_err = self._get_goal_relative()
+        r_min = float(min(self._latest_scan.ranges)) if self._latest_scan else self.max_range
+
+        reward, terminated, reason = self._compute_reward(dist, heading_err, r_min)
+
+        self._prev_dist = dist
+
+        truncated = (not terminated) and (self._step_count >= self.max_steps)
+        if truncated:
+            reward += self.timeout_reward
 
         info = {
+            "step": self._step_count,
             "v_cmd": v,
             "w_cmd": w,
-            "step": self._step_count,
+            "goal_dist": dist,
+            "heading_err": heading_err,
+            "r_min": r_min,
+            "outcome": reason if terminated else ("timeout" if truncated else ""),
         }
         return obs, reward, terminated, truncated, info
 

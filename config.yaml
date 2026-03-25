@@ -14,9 +14,25 @@ env:
   w_max: 2.0
   r_safe: 0.30
 
-reward:
-  time_penalty: -0.5
+# Goal sampling and termination tolerances
+goal:
+  min_dist: 1.0          # minimum goal distance from robot start (m)
+  max_dist: 3.0          # maximum goal distance from robot start (m)
+  tol_dist: 0.25         # success distance threshold (m) — from Phase 1
+  tol_heading_deg: 15.0  # success heading threshold (degrees) — from Phase 1
+  norm_dist: 5.0         # divisor for normalizing obs[60] goal distance feature
 
+# Reward function — values from Phase 1 MDP design
+reward:
+  time_penalty: -0.5       # applied every step
+  safety_penalty: -2.0     # applied when r_min < r_safe
+  success_reward: 200.0    # terminal reward on goal reached
+  collision_reward: -200.0 # terminal reward on collision (r_min < collision_dist)
+  timeout_reward: -50.0    # terminal reward on episode timeout
+  progress_scale: 10.0     # multiplier for (d_prev - d_curr) progress shaping
+  collision_dist: 0.20     # LiDAR range threshold for collision detection (m)
+
+# PPO baseline hyperparameters
 ppo:
   policy: MlpPolicy
   gamma: 0.99
@@ -27,6 +43,40 @@ ppo:
   clip_range: 0.2
   verbose: 1
 
+# SAC advanced hyperparameters
+sac:
+  policy: MlpPolicy
+  gamma: 0.99
+  learning_rate: 0.0003
+  buffer_size: 100000      # replay buffer capacity (off-policy advantage over PPO)
+  learning_starts: 1000    # steps before first gradient update
+  batch_size: 256
+  tau: 0.005               # soft target network update coefficient
+  ent_coef: auto           # automatic entropy tuning (SAC signature feature)
+  train_freq: 1            # update every step
+  gradient_steps: 1
+  verbose: 1
+
+# Training schedule — shared across both algorithms
+training:
+  ppo_timesteps: 500000
+  sac_timesteps: 500000
+  eval_freq: 10000         # environment steps between evaluation runs
+  n_eval_episodes: 20      # episodes per periodic evaluation
+  checkpoint_freq: 50000   # steps between checkpoint saves
+  seed: 42                 # random seed for reproducibility
+  # Option B: Local machine with NVIDIA GPU
+  # Set device to "cuda" if you have an NVIDIA GPU with CUDA + cuDNN installed.
+  # Requires: correct NVIDIA drivers, CUDA toolkit, and torch built with CUDA support.
+  # Verify with: python3 -c "import torch; print(torch.cuda.is_available())"
+  # Set to "cpu" if no GPU is available (slower but functional for short runs).
+  device: cuda
+
+# File paths for models and logs
 paths:
-  model_path: ppo_results/ppo_model.zip
-  log_dir: ppo_results/
+  ppo_model_path: ppo_results/ppo_model.zip
+  sac_model_path: sac_results/sac_model.zip
+  ppo_log_dir: ppo_results/
+  sac_log_dir: sac_results/
+  ppo_metrics_csv: ppo_results/metrics.csv
+  sac_metrics_csv: sac_results/metrics.csv
