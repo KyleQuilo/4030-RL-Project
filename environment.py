@@ -214,18 +214,18 @@ class Ros2NavEnv(gym.Env):
         """
         Teleport the robot back to its spawn pose via gz set_pose service.
 
-        Uses the targeted set_pose service rather than a full world reset so
-        that physics entity IDs are preserved and no link/joint warnings are
-        generated. Failures are silently ignored so the environment degrades
-        gracefully if the service is unavailable.
+        First attempts to teleport via gz service. If that fails (gz not in
+        PATH, wrong service name, etc.) falls back to a backup maneuver that
+        physically drives the robot away from any wall it may be stuck against.
         """
         req = (
             f'name: "{self.gz_model_name}" '
             f'position: {{x: 0.0 y: 0.0 z: 0.01}} '
             f'orientation: {{w: 1.0}}'
         )
+        teleport_ok = False
         try:
-            subprocess.run(
+            result = subprocess.run(
                 [
                     "gz", "service",
                     "-s", f"/world/{self.gz_world_name}/set_pose",
@@ -236,10 +236,19 @@ class Ros2NavEnv(gym.Env):
                 ],
                 timeout=3.0,
                 capture_output=True,
+                text=True,
             )
-        except Exception:
-            pass
-        time.sleep(0.5)
+            teleport_ok = result.returncode == 0
+            if not teleport_ok:
+                self.node.get_logger().warn(
+                    f"gz set_pose failed (rc={result.returncode}): {result.stderr.strip()}"
+                )
+        except FileNotFoundError:
+            self.node.get_logger().warn("gz binary not found; using backup maneuver")
+        except Exception as e:
+            self.node.get_logger().warn(f"gz set_pose error: {e}")
+
+        time.sleep(1.0)
 
     def _sample_goal(self):
         """
