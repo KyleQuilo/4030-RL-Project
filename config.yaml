@@ -13,6 +13,8 @@ env:
   v_max: 0.22
   w_max: 2.0
   r_safe: 0.30
+  gz_world_name: turtlebot3_world   # Gazebo world name used for robot teleport on reset
+  gz_model_name: turtlebot3_burger  # Gazebo model name of the robot
 
 # Goal sampling and termination tolerances
 goal:

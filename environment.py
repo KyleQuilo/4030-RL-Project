@@ -81,6 +81,8 @@ class Ros2NavEnv(gym.Env):
         self.v_max = float(env_cfg["v_max"])
         self.w_max = float(env_cfg["w_max"])
         self.r_safe = float(env_cfg["r_safe"])
+        self.gz_world_name = str(env_cfg.get("gz_world_name", "turtlebot3_world"))
+        self.gz_model_name = str(env_cfg.get("gz_model_name", "turtlebot3_burger"))
 
         # Reward parameters
         self.time_penalty = float(reward_cfg.get("time_penalty", -0.5))
@@ -210,28 +212,34 @@ class Ros2NavEnv(gym.Env):
 
     def _reset_gazebo(self):
         """
-        Reset the Gazebo world to its initial state via gz service.
+        Teleport the robot back to its spawn pose via gz set_pose service.
 
-        Teleports the robot back to its spawn position so each episode starts
-        from a clean state. Failures are silently ignored so the environment
-        degrades gracefully if the service is unavailable.
+        Uses the targeted set_pose service rather than a full world reset so
+        that physics entity IDs are preserved and no link/joint warnings are
+        generated. Failures are silently ignored so the environment degrades
+        gracefully if the service is unavailable.
         """
+        req = (
+            f'name: "{self.gz_model_name}" '
+            f'position: {{x: 0.0 y: 0.0 z: 0.01}} '
+            f'orientation: {{w: 1.0}}'
+        )
         try:
             subprocess.run(
                 [
                     "gz", "service",
-                    "-s", "/world/turtlebot3_world/control",
-                    "--reqtype", "gz.msgs.WorldControl",
+                    "-s", f"/world/{self.gz_world_name}/set_pose",
+                    "--reqtype", "gz.msgs.Pose",
                     "--reptype", "gz.msgs.Boolean",
-                    "--timeout", "3000",
-                    "--req", "reset: {all: true}",
+                    "--timeout", "2000",
+                    "--req", req,
                 ],
-                timeout=5.0,
+                timeout=3.0,
                 capture_output=True,
             )
         except Exception:
             pass
-        time.sleep(1.0)
+        time.sleep(0.5)
 
     def _sample_goal(self):
         """
