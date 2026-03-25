@@ -131,11 +131,13 @@ class Ros2NavEnv(gym.Env):
         # Previous distance to goal for progress shaping
         self._prev_dist = None
 
-        # ROS 2 setup
+        # ROS 2 setup — use a unique node name so train_env and eval_env
+        # can coexist in the same process without a naming conflict.
         if not rclpy.ok():
             rclpy.init(args=None)
 
-        self.node = Node("ros2_nav_env")
+        import uuid
+        self.node = Node(f"ros2_nav_env_{uuid.uuid4().hex[:8]}")
         self.node.create_subscription(LaserScan, self.scan_topic, self._scan_cb, 10)
         self.node.create_subscription(Odometry, self.odom_topic, self._odom_cb, 10)
         self.cmd_pub = self.node.create_publisher(TwistStamped, self.cmd_topic, 10)
@@ -397,7 +399,11 @@ class Ros2NavEnv(gym.Env):
 
     def close(self):
         """
-        Stop the robot and shut down the ROS 2 node cleanly.
+        Stop the robot and destroy the ROS 2 node.
+
+        Does not call rclpy.shutdown() so that multiple environments can
+        coexist in the same process (train_env and eval_env). The rclpy
+        context is left running and cleaned up when the process exits.
         """
         try:
             self._publish_action(0.0, 0.0)
@@ -408,6 +414,3 @@ class Ros2NavEnv(gym.Env):
             self.node.destroy_node()
         except Exception:
             pass
-
-        if rclpy.ok():
-            rclpy.shutdown()
