@@ -18,11 +18,12 @@ env:
   robot_radius: 0.105               # TurtleBot3 Burger footprint radius (m) — used for obstacle clearance
   reset_x: -0.55                    # Safe reset position — away from the (0,0) center cylinder
   reset_y: -0.55                    # Between cylinders at (-1.1,-1.1), (-1.1,0), (0,-1.1), (0,0)
-  # Navigable area — circular boundary derived from wall.dae mesh geometry:
-  #   Hexagonal room: apothem (flat face to centre) = 1.0m (inscribed circle radius)
-  #   Safe goal radius = apothem - robot_radius - margin = 1.0 - 0.105 - 0.05 ≈ 0.845m
-  #   Using a circle (r=0.84) is simpler and always stays inside the hexagon's flat faces.
-  arena_radius: 0.84
+  # Navigable area — circular boundary.
+  #   Hexagon corners (green blobs) are at approx (-1.8,±2.7), (+1.8,±2.7), (3.5,0).
+  #   Inner wall face is ~0.5m inside those, giving ~1.8-2.0m usable radius.
+  #   Cylinders at ±1.1m are well inside the floor — NOT the boundary.
+  #   Using 1.8m keeps the robot off the walls with a safe margin.
+  arena_radius: 1.8
 
 # Goal sampling and termination tolerances
 goal:
@@ -32,14 +33,19 @@ goal:
   tol_heading_deg: 15.0  # success heading threshold (degrees) — from Phase 1
   norm_dist: 5.0         # divisor for normalizing obs[60] goal distance feature
 
-# Reward function — values from Phase 1 MDP design
+# Reward function
+# Terminal rewards scaled to ~10-20x a typical episode's step total so the
+# signal is clear but doesn't completely wash out the dense shaping.
+# At max_steps=600 and ~-0.1/step the total step reward ≈ -60, so terminals
+# of ±100 are ~1.5-2x the step total — large enough to matter, small enough
+# that the dense progress signal still trains the policy.
 reward:
-  time_penalty: -0.1       # applied every step (reduced from -0.5 so progress signal dominates)
-  safety_penalty: -2.0     # applied when r_min < r_safe
-  success_reward: 200.0    # terminal reward on goal reached
-  collision_reward: -200.0 # terminal reward on collision (r_min < collision_dist)
-  timeout_reward: -50.0    # terminal reward on episode timeout
-  progress_scale: 15.0     # multiplier for (d_prev - d_curr) progress shaping (increased from 10)
+  time_penalty: -0.1       # applied every step
+  safety_penalty: -1.0     # applied when r_min < r_safe (reduced so it shapes not dominates)
+  success_reward: 100.0    # terminal reward on goal reached
+  collision_reward: -100.0 # terminal reward on collision (r_min < collision_dist)
+  timeout_reward: -20.0    # terminal reward on episode timeout
+  progress_scale: 60.0     # multiplier for (d_prev - d_curr) progress shaping
   collision_dist: 0.20     # LiDAR range threshold for collision detection (m)
 
 # PPO baseline hyperparameters

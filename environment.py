@@ -87,7 +87,7 @@ class Ros2NavEnv(gym.Env):
         self.robot_radius = float(env_cfg.get("robot_radius", 0.105))  # TurtleBot3 Burger footprint
         # Circular arena boundary — inscribed circle of the hexagonal room.
         # arena_radius is the safe goal-centre radius (already accounts for walls).
-        self.arena_radius = float(env_cfg.get("arena_radius", 0.84))
+        self.arena_radius = float(env_cfg.get("arena_radius", 1.8))
         self.gz_world_name = str(env_cfg.get("gz_world_name", "default"))
         self.gz_model_name = str(env_cfg.get("gz_model_name", "burger"))
 
@@ -148,6 +148,16 @@ class Ros2NavEnv(gym.Env):
         # Track how far the robot moved this episode for stuck-detection
         self._episode_start_x = 0.0
         self._episode_start_y = 0.0
+
+        # Odometry world-frame offset.
+        # set_pose moves the physical robot but the wheel-encoder /odom keeps
+        # accumulating from wherever it was.  We compute the offset each reset
+        # as  offset = spawn - odom_raw_at_teleport  so that:
+        #   world_pos = odom_raw + offset
+        self._odom_raw_x = 0.0
+        self._odom_raw_y = 0.0
+        self._odom_offset_x = 0.0
+        self._odom_offset_y = 0.0
 
         # Simulation time tracking — updated from /clock so step() waits for
         # exactly dt seconds of SIM time rather than wall time.  This makes
@@ -389,10 +399,10 @@ class Ros2NavEnv(gym.Env):
         """
         Return True if (gx, gy) is outside the navigable arena.
 
-        Uses a circular boundary matching the hexagonal room's inscribed
-        circle (apothem). The effective limit already includes wall clearance
-        (arena_radius = apothem - robot_radius - margin), so the robot centre
-        must simply stay within arena_radius of the world origin.
+        Uses a conservative circular approximation of the arena's navigable
+        floor. The effective limit is the inner wall face with a safety
+        margin, so the robot centre must simply stay within arena_radius of
+        the world origin.
 
         Args:
             gx, gy (float): Candidate goal position in world frame.
@@ -425,12 +435,18 @@ class Ros2NavEnv(gym.Env):
         """
         Store the most recent Odometry message and extract robot pose.
 
+        /odom integrates wheel encoders from (0,0) after each world reset.
+        _odom_offset converts that to the true world-frame position so that
+        all other code always works in consistent world coordinates.
+
         Args:
             msg (Odometry): Incoming odometry message containing pose and twist.
         """
         self._latest_odom = msg
-        self._robot_x = float(msg.pose.pose.position.x)
-        self._robot_y = float(msg.pose.pose.position.y)
+        self._odom_raw_x = float(msg.pose.pose.position.x)
+        self._odom_raw_y = float(msg.pose.pose.position.y)
+        self._robot_x = self._odom_raw_x + self._odom_offset_x
+        self._robot_y = self._odom_raw_y + self._odom_offset_y
 
         q = msg.pose.pose.orientation
         self._robot_yaw = math.atan2(
@@ -477,18 +493,24 @@ class Ros2NavEnv(gym.Env):
 
     def _reset_gazebo(self):
         """
-        Teleport the robot back to its spawn pose via gz set_pose service.
+        Teleport the robot to its spawn position for a new episode.
 
-        First attempts to teleport via gz service. If that fails (gz not in
-        PATH, wrong service name, etc.) falls back to a backup maneuver that
-        physically drives the robot away from any wall it may be stuck against.
+        set_pose moves the physical model in Gazebo but the wheel-encoder /odom
+        keeps accumulating from wherever it was.  We capture odom_raw just
+        before the teleport and set:
+            offset = spawn - odom_raw_at_teleport
+        so that throughout the episode:
+            world_pos = odom_raw + offset = spawn + (movement since reset)
         """
+        # Capture raw odom position just before teleporting
+        self._odom_offset_x = self._spawn_x - self._odom_raw_x
+        self._odom_offset_y = self._spawn_y - self._odom_raw_y
+
         req = (
             f'name: "{self.gz_model_name}" '
             f'position: {{x: {self._spawn_x} y: {self._spawn_y} z: {self._spawn_z}}} '
             f'orientation: {{w: 1.0}}'
         )
-        teleport_ok = False
         try:
             result = subprocess.run(
                 [
@@ -503,29 +525,20 @@ class Ros2NavEnv(gym.Env):
                 capture_output=True,
                 text=True,
             )
-            teleport_ok = result.returncode == 0
-            if teleport_ok:
-                if self._debug_this_episode:
-                    self.node.get_logger().info(
-                        f"[EP {self._episode_count}] Teleport OK -> x={self._spawn_x:.3f} y={self._spawn_y:.3f}"
-                    )
+            if result.returncode == 0:
+                self.node.get_logger().info(
+                    f"[EP {self._episode_count}] Reset OK -> "
+                    f"world=({self._spawn_x:.3f},{self._spawn_y:.3f})"
+                )
             else:
                 self.node.get_logger().warn(
-                    f"gz set_pose failed (rc={result.returncode}): {result.stderr.strip()}"
+                    f"set_pose failed (rc={result.returncode}): {result.stderr.strip()}"
                 )
-        except FileNotFoundError:
-            self.node.get_logger().warn("gz binary not found; using backup maneuver")
         except Exception as e:
-            self.node.get_logger().warn(f"gz set_pose error: {e}")
+            self.node.get_logger().warn(f"set_pose error: {e}")
 
+        # Brief pause for Gazebo to process set_pose before we read observations
         time.sleep(0.5)
-        # Wait until odometry reflects the new pose.  After a Gazebo set_pose
-        # call there is a lag before /odom updates; spinning on "any message"
-        # is not sufficient — we need the position to be close to the target.
-        if teleport_ok:
-            self._wait_for_pose(
-                self._spawn_x, self._spawn_y, tolerance=0.15, timeout_sec=3.0
-            )
 
     def _wait_for_pose(self, target_x, target_y, tolerance=0.15, timeout_sec=3.0):
         """
@@ -642,7 +655,7 @@ class Ros2NavEnv(gym.Env):
 
         Returns:
             tuple[float, bool, str]: (reward, terminated, reason) where reason
-                is one of "success", "collision", or "" (not terminated).
+                is one of "success", "collision", "out_of_bounds", or "".
         """
         reward = 0.0
 
@@ -666,6 +679,11 @@ class Ros2NavEnv(gym.Env):
         if r_min < self.collision_dist:
             reward += self.collision_reward
             return reward, True, "collision"
+
+        # Out of bounds: robot escaped the arena
+        if self._goal_out_of_bounds(self._robot_x, self._robot_y):
+            reward += self.collision_reward
+            return reward, True, "out_of_bounds"
 
         return reward, False, ""
 
