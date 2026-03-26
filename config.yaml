@@ -72,7 +72,7 @@ training:
   # Requires: correct NVIDIA drivers, CUDA toolkit, and torch built with CUDA support.
   # Verify with: python3 -c "import torch; print(torch.cuda.is_available())"
   # Set to "cpu" if no GPU is available (slower but functional for short runs).
-  device: cuda
+  device: cpu
 
 # File paths for models and logs
 paths:

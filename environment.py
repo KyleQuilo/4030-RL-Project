@@ -151,6 +151,13 @@ class Ros2NavEnv(gym.Env):
 
         self._wait_for_topics()
 
+        # Record the launch-file spawn position as the reset target so
+        # _reset_gazebo() teleports back to wherever Gazebo originally placed
+        # the robot rather than a hardcoded (0, 0).
+        self._spawn_x = self._robot_x
+        self._spawn_y = self._robot_y
+        self._spawn_z = 0.01
+
     def _scan_cb(self, msg: LaserScan):
         """
         Store the most recent LaserScan message.
@@ -220,7 +227,7 @@ class Ros2NavEnv(gym.Env):
         """
         req = (
             f'name: "{self.gz_model_name}" '
-            f'position: {{x: 0.0 y: 0.0 z: 0.01}} '
+            f'position: {{x: {self._spawn_x} y: {self._spawn_y} z: {self._spawn_z}}} '
             f'orientation: {{w: 1.0}}'
         )
         teleport_ok = False
@@ -426,11 +433,11 @@ class Ros2NavEnv(gym.Env):
         obs = self._get_obs()
 
         dist, heading_err = self._get_goal_relative()
-        # Filter out invalid LiDAR readings: TurtleBot3 returns 0.0 for beams
-        # below the sensor's minimum range (~0.12 m) and inf for no-return beams.
-        # Using raw min() would always yield 0.0, falsely triggering collision.
+        # Keep 0.0 readings (below sensor minimum range = touching an obstacle).
+        # Only filter inf (no-return beams pointing into open space).
+        # A 0.0 reading means the wall is within ~0.12 m — collision territory.
         if self._latest_scan:
-            valid = [r for r in self._latest_scan.ranges if 0.0 < r < float("inf")]
+            valid = [r for r in self._latest_scan.ranges if r < float("inf")]
             r_min = float(min(valid)) if valid else self.max_range
         else:
             r_min = self.max_range
