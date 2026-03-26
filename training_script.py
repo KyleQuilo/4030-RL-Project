@@ -29,6 +29,7 @@ from stable_baselines3.common.callbacks import (
     EvalCallback,
 )
 from stable_baselines3.common.monitor import Monitor
+from gymnasium.wrappers import RescaleAction
 
 from environment import Ros2NavEnv
 from ppo_agent import PPOAgent
@@ -158,6 +159,10 @@ def make_env(config_path="config.yaml", monitor_path=None):
         Ros2NavEnv or Monitor: Configured environment instance.
     """
     env = Ros2NavEnv(config_path)
+    # Rescale the policy's [-1, 1] output to the environment's actual action
+    # bounds ([0, v_max] for linear velocity, [-w_max, w_max] for angular).
+    # This prevents the Gaussian policy from piling up at the clipped extremes.
+    env = RescaleAction(env, min_action=-1.0, max_action=1.0)
     if monitor_path is not None:
         os.makedirs(monitor_path, exist_ok=True)
         env = Monitor(env, monitor_path)

@@ -13,13 +13,21 @@ env:
   v_max: 0.22
   w_max: 2.0
   r_safe: 0.30
-  gz_world_name: default            # Gazebo world name used for robot teleport on reset
-  gz_model_name: burger             # Gazebo model name of the robot
+  gz_world_name: default            # Gazebo world name — confirmed via `gz service --list | grep world`
+  gz_model_name: burger             # Gazebo model name — run `gz model --list` to confirm
+  robot_radius: 0.105               # TurtleBot3 Burger footprint radius (m) — used for obstacle clearance
+  reset_x: -0.55                    # Safe reset position — away from the (0,0) center cylinder
+  reset_y: -0.55                    # Between cylinders at (-1.1,-1.1), (-1.1,0), (0,-1.1), (0,0)
+  # Navigable area — circular boundary derived from wall.dae mesh geometry:
+  #   Hexagonal room: apothem (flat face to centre) = 1.0m (inscribed circle radius)
+  #   Safe goal radius = apothem - robot_radius - margin = 1.0 - 0.105 - 0.05 ≈ 0.845m
+  #   Using a circle (r=0.84) is simpler and always stays inside the hexagon's flat faces.
+  arena_radius: 0.84
 
 # Goal sampling and termination tolerances
 goal:
-  min_dist: 1.0          # minimum goal distance from robot start (m)
-  max_dist: 3.0          # maximum goal distance from robot start (m)
+  min_dist: 0.5          # minimum goal distance from robot start (m)
+  max_dist: 2.0          # maximum goal distance from robot start (m) — keep within arena
   tol_dist: 0.25         # success distance threshold (m) — from Phase 1
   tol_heading_deg: 15.0  # success heading threshold (degrees) — from Phase 1
   norm_dist: 5.0         # divisor for normalizing obs[60] goal distance feature

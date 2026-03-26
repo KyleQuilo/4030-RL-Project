@@ -1,6 +1,8 @@
 import math
+import os
 import subprocess
 import time
+import xml.etree.ElementTree as ET
 import numpy as np
 import rclpy
 from rclpy.node import Node
@@ -8,6 +10,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import TwistStamped
+from rosgraph_msgs.msg import Clock
 
 import gymnasium as gym
 from gymnasium import spaces
@@ -81,8 +84,12 @@ class Ros2NavEnv(gym.Env):
         self.v_max = float(env_cfg["v_max"])
         self.w_max = float(env_cfg["w_max"])
         self.r_safe = float(env_cfg["r_safe"])
-        self.gz_world_name = str(env_cfg.get("gz_world_name", "turtlebot3_world"))
-        self.gz_model_name = str(env_cfg.get("gz_model_name", "turtlebot3_burger"))
+        self.robot_radius = float(env_cfg.get("robot_radius", 0.105))  # TurtleBot3 Burger footprint
+        # Circular arena boundary — inscribed circle of the hexagonal room.
+        # arena_radius is the safe goal-centre radius (already accounts for walls).
+        self.arena_radius = float(env_cfg.get("arena_radius", 0.84))
+        self.gz_world_name = str(env_cfg.get("gz_world_name", "default"))
+        self.gz_model_name = str(env_cfg.get("gz_model_name", "burger"))
 
         # Reward parameters
         self.time_penalty = float(reward_cfg.get("time_penalty", -0.5))
@@ -134,6 +141,19 @@ class Ros2NavEnv(gym.Env):
         # Previous distance to goal for progress shaping
         self._prev_dist = None
 
+        # Debug logging: tracks which episodes to log in detail
+        self._episode_count = 0
+        self._debug_this_episode = True   # log every episode; change to (% N == 0) once working
+
+        # Track how far the robot moved this episode for stuck-detection
+        self._episode_start_x = 0.0
+        self._episode_start_y = 0.0
+
+        # Simulation time tracking — updated from /clock so step() waits for
+        # exactly dt seconds of SIM time rather than wall time.  This makes
+        # training consistent regardless of Gazebo real-time factor.
+        self._sim_time = 0.0
+
         # ROS 2 setup — use a unique node name so train_env and eval_env
         # can coexist in the same process without a naming conflict.
         if not rclpy.ok():
@@ -143,6 +163,7 @@ class Ros2NavEnv(gym.Env):
         self.node = Node(f"ros2_nav_env_{uuid.uuid4().hex[:8]}")
         self.node.create_subscription(LaserScan, self.scan_topic, self._scan_cb, 10)
         self.node.create_subscription(Odometry, self.odom_topic, self._odom_cb, 10)
+        self.node.create_subscription(Clock, "/clock", self._clock_cb, 10)
         self.cmd_pub = self.node.create_publisher(TwistStamped, self.cmd_topic, 10)
 
         self.node.get_logger().info(
@@ -151,12 +172,245 @@ class Ros2NavEnv(gym.Env):
 
         self._wait_for_topics()
 
-        # Record the launch-file spawn position as the reset target so
-        # _reset_gazebo() teleports back to wherever Gazebo originally placed
-        # the robot rather than a hardcoded (0, 0).
-        self._spawn_x = self._robot_x
-        self._spawn_y = self._robot_y
+        # Log Gazebo real-time factor once at startup so slow-sim issues are
+        # immediately visible in the training log.
+        self._log_gz_rtf()
+
+        # Use config reset position if provided, otherwise fall back to the
+        # position captured from odometry at startup.
+        cfg_reset_x = env_cfg.get("reset_x", None)
+        cfg_reset_y = env_cfg.get("reset_y", None)
+        if cfg_reset_x is not None and cfg_reset_y is not None:
+            self._spawn_x = float(cfg_reset_x)
+            self._spawn_y = float(cfg_reset_y)
+        else:
+            self._spawn_x = self._robot_x
+            self._spawn_y = self._robot_y
         self._spawn_z = 0.01
+
+        self.node.get_logger().info(
+            f"[ENV] Reset position: x={self._spawn_x:.3f} y={self._spawn_y:.3f}  "
+            f"(odom start was x={self._robot_x:.3f} y={self._robot_y:.3f})"
+        )
+
+        # Load obstacle positions from the turtlebot3_world SDF.
+        # _obstacle_boxes is populated as a side-effect of the call.
+        self._obstacle_boxes: list = []
+        self._obstacle_cylinders = self._load_obstacle_positions()
+
+    # ------------------------------------------------------------------
+    # Obstacle map
+    # ------------------------------------------------------------------
+
+    def _log_gz_rtf(self):
+        """
+        Query ``gz stats`` once and log the current Gazebo real-time factor.
+
+        Runs at environment startup so any sim-speed issues are immediately
+        visible. Non-fatal: if gz is unavailable the warning is logged and
+        training continues normally.
+        """
+        try:
+            result = subprocess.run(
+                ["gz", "stats", "-d", "1"],
+                capture_output=True, text=True, timeout=5.0,
+            )
+            rtf = None
+            for line in result.stdout.splitlines():
+                if "Real time factor" in line or "RTF" in line:
+                    parts = line.split(":")
+                    if len(parts) >= 2:
+                        rtf = parts[-1].strip()
+                        break
+            if rtf:
+                self.node.get_logger().info(f"[ENV] Gazebo RTF: {rtf}")
+            else:
+                # Fall back: show raw output on first line
+                first = result.stdout.strip().splitlines()[0] if result.stdout.strip() else "(no output)"
+                self.node.get_logger().info(f"[ENV] gz stats: {first}")
+        except Exception as e:
+            self.node.get_logger().warn(f"[ENV] Could not read gz stats: {e}")
+
+    @staticmethod
+    def _parse_pose(pose_el) -> tuple:
+        """
+        Parse an SDF ``<pose>x y z r p yaw</pose>`` element.
+
+        Returns:
+            tuple: (x, y, z, roll, pitch, yaw) floats, all zero if element
+                is None or has no text.
+        """
+        if pose_el is not None and pose_el.text:
+            parts = pose_el.text.strip().split()
+            vals = [float(v) for v in parts]
+            while len(vals) < 6:
+                vals.append(0.0)
+            return tuple(vals)
+        return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+
+    def _load_obstacle_positions(self):
+        """
+        Parse the turtlebot3_world model SDF to extract obstacle positions.
+
+        SDF structure (confirmed from file inspection):
+          - ONE model (ros_symbol) with ONE link (symbol)
+          - Collision elements are direct children of that link, named
+            one_one … three_three (9 cylinders) plus head/hands/feet/body
+            which use mesh geometry and are outside the navigable arena
+          - Walls are a scaled .dae mesh — no parseable box geometry, so
+            arena bounds stay at their config.yaml values
+
+        Also parses any <box> collision elements found (none in this world,
+        but supported for extensibility). Results stored in:
+            self._obstacle_cylinders  — [x, y, radius] list (return value)
+            self._obstacle_boxes      — [cx, cy, hx, hy, yaw] list
+
+        Returns:
+            list: [world_x, world_y, radius] for each cylinder obstacle.
+        """
+        cylinders: list = []
+        self._obstacle_boxes = []
+
+        try:
+            # --- locate SDF ---
+            res = subprocess.run(
+                ["ros2", "pkg", "prefix", "turtlebot3_gazebo"],
+                capture_output=True, text=True, timeout=5.0,
+            )
+            if res.returncode != 0:
+                self.node.get_logger().warn("[ENV] ros2 pkg prefix turtlebot3_gazebo failed")
+                return cylinders
+            prefix = res.stdout.strip()
+            sdf_path = os.path.join(
+                prefix, "share", "turtlebot3_gazebo",
+                "models", "turtlebot3_world", "model.sdf",
+            )
+            if not os.path.exists(sdf_path):
+                self.node.get_logger().warn(f"[ENV] SDF not found: {sdf_path}")
+                return cylinders
+
+            # --- get model world-frame offset via gz model ---
+            offset_x, offset_y = 0.0, 0.0
+            try:
+                gz_res = subprocess.run(
+                    ["gz", "model", "-m", "turtlebot3_world", "-p"],
+                    capture_output=True, text=True, timeout=3.0,
+                )
+                if gz_res.returncode == 0:
+                    for line in gz_res.stdout.splitlines():
+                        line = line.strip()
+                        if line.startswith("x:"):
+                            offset_x = float(line.split(":")[1])
+                        elif line.startswith("y:"):
+                            offset_y = float(line.split(":")[1])
+            except Exception:
+                pass
+
+            # --- parse SDF ---
+            # All collision elements live as direct named children of the
+            # single 'symbol' link.  Iterate every <collision> in the file
+            # and dispatch by geometry type; mesh-based ones are skipped.
+            tree = ET.parse(sdf_path)
+            sdf_root = tree.getroot()
+
+            seen: set = set()
+            for collision in sdf_root.iter("collision"):
+                px, py, _, _, _, yaw = self._parse_pose(collision.find("pose"))
+                wx, wy = offset_x + px, offset_y + py
+
+                # Cylinder obstacle
+                cyl_el = collision.find(".//cylinder")
+                if cyl_el is not None:
+                    r_el = cyl_el.find("radius")
+                    if r_el is not None and r_el.text:
+                        key = (round(wx, 3), round(wy, 3))
+                        if key not in seen:
+                            seen.add(key)
+                            cylinders.append([wx, wy, float(r_el.text)])
+                    continue
+
+                # Box obstacle (none in this world, kept for extensibility)
+                box_el = collision.find(".//box")
+                if box_el is not None:
+                    size_el = box_el.find("size")
+                    if size_el is not None and size_el.text:
+                        sx, sy, _ = [float(v) for v in size_el.text.strip().split()]
+                        key = (round(wx, 3), round(wy, 3))
+                        if key not in seen:
+                            seen.add(key)
+                            self._obstacle_boxes.append(
+                                [wx, wy, sx / 2.0, sy / 2.0, yaw]
+                            )
+                # mesh geometry — skipped (walls/decorations outside arena)
+
+            self.node.get_logger().info(
+                f"[ENV] Obstacle map: {len(cylinders)} cylinders, "
+                f"{len(self._obstacle_boxes)} boxes  "
+                f"(model offset x={offset_x:.3f} y={offset_y:.3f})  |  "
+                f"Arena radius={self.arena_radius:.2f}m"
+            )
+            self.node.get_logger().info(
+                "[ENV] Cylinders: "
+                + ", ".join(f"({c[0]:.2f},{c[1]:.2f}) r={c[2]:.2f}" for c in cylinders)
+            )
+
+        except Exception as e:
+            self.node.get_logger().warn(f"[ENV] Could not load obstacle map: {e}")
+
+        return cylinders
+
+    def _goal_in_obstacle(self, gx: float, gy: float, margin: float = 0.10) -> bool:
+        """
+        Return True if placing the robot centre at (gx, gy) would overlap an
+        obstacle cylinder, accounting for both the cylinder radius and the
+        robot's own physical footprint.
+
+        The minimum safe distance is:
+            cylinder_radius + robot_radius + margin
+
+        Args:
+            gx, gy (float): Candidate position in world frame.
+            margin (float): Extra safety buffer beyond physical contact (m).
+        """
+        min_dist = self.robot_radius + margin
+        for cx, cy, cr in self._obstacle_cylinders:
+            if math.hypot(gx - cx, gy - cy) < cr + min_dist:
+                return True
+        for cx, cy, hx, hy, yaw in self._obstacle_boxes:
+            # Transform point into the box's local frame, then do AABB check.
+            dx, dy = gx - cx, gy - cy
+            local_x = dx * math.cos(yaw) + dy * math.sin(yaw)
+            local_y = -dx * math.sin(yaw) + dy * math.cos(yaw)
+            if abs(local_x) < hx + min_dist and abs(local_y) < hy + min_dist:
+                return True
+        return False
+
+    def _goal_out_of_bounds(self, gx: float, gy: float) -> bool:
+        """
+        Return True if (gx, gy) is outside the navigable arena.
+
+        Uses a circular boundary matching the hexagonal room's inscribed
+        circle (apothem). The effective limit already includes wall clearance
+        (arena_radius = apothem - robot_radius - margin), so the robot centre
+        must simply stay within arena_radius of the world origin.
+
+        Args:
+            gx, gy (float): Candidate goal position in world frame.
+        """
+        return math.hypot(gx, gy) > self.arena_radius
+
+    def _clock_cb(self, msg: Clock):
+        """
+        Track Gazebo simulation time from /clock.
+
+        Storing sim time lets step() wait for exactly dt seconds of simulation
+        time rather than wall time, keeping each step consistent regardless of
+        the Gazebo real-time factor.
+
+        Args:
+            msg (Clock): Incoming clock message from Gazebo.
+        """
+        self._sim_time = msg.clock.sec + msg.clock.nanosec * 1e-9
 
     def _scan_cb(self, msg: LaserScan):
         """
@@ -203,6 +457,10 @@ class Ros2NavEnv(gym.Env):
         if self._latest_scan is None or self._latest_odom is None:
             raise RuntimeError("Timed out waiting for /scan and /odom messages")
 
+        self.node.get_logger().info(
+            f"[ENV] Topics ready: x={self._robot_x:.3f} y={self._robot_y:.3f} yaw={self._robot_yaw:.3f}"
+        )
+
     def _publish_action(self, v, w):
         """
         Publish a velocity command to the robot.
@@ -246,7 +504,12 @@ class Ros2NavEnv(gym.Env):
                 text=True,
             )
             teleport_ok = result.returncode == 0
-            if not teleport_ok:
+            if teleport_ok:
+                if self._debug_this_episode:
+                    self.node.get_logger().info(
+                        f"[EP {self._episode_count}] Teleport OK -> x={self._spawn_x:.3f} y={self._spawn_y:.3f}"
+                    )
+            else:
                 self.node.get_logger().warn(
                     f"gz set_pose failed (rc={result.returncode}): {result.stderr.strip()}"
                 )
@@ -255,7 +518,37 @@ class Ros2NavEnv(gym.Env):
         except Exception as e:
             self.node.get_logger().warn(f"gz set_pose error: {e}")
 
-        time.sleep(1.0)
+        time.sleep(0.5)
+        # Wait until odometry reflects the new pose.  After a Gazebo set_pose
+        # call there is a lag before /odom updates; spinning on "any message"
+        # is not sufficient — we need the position to be close to the target.
+        if teleport_ok:
+            self._wait_for_pose(
+                self._spawn_x, self._spawn_y, tolerance=0.15, timeout_sec=3.0
+            )
+
+    def _wait_for_pose(self, target_x, target_y, tolerance=0.15, timeout_sec=3.0):
+        """
+        Spin until odometry reports a position within *tolerance* metres of
+        (target_x, target_y), or until timeout_sec elapses.
+
+        Args:
+            target_x, target_y (float): Expected position after teleport.
+            tolerance (float): Acceptable distance from target (m).
+            timeout_sec (float): Give up and continue after this many seconds.
+        """
+        start = time.time()
+        while time.time() - start < timeout_sec:
+            rclpy.spin_once(self.node, timeout_sec=0.05)
+            dx = self._robot_x - target_x
+            dy = self._robot_y - target_y
+            if math.sqrt(dx * dx + dy * dy) < tolerance:
+                return
+        self.node.get_logger().warn(
+            f"[EP {self._episode_count}] _wait_for_pose timed out: "
+            f"robot=({self._robot_x:.3f},{self._robot_y:.3f}) "
+            f"target=({target_x:.3f},{target_y:.3f})"
+        )
 
     def _sample_goal(self):
         """
@@ -263,11 +556,26 @@ class Ros2NavEnv(gym.Env):
 
         The goal is placed at a random distance within [goal_min_dist, goal_max_dist]
         and a random angle in [-pi, pi] relative to the robot's current heading.
+        Retries up to 100 times to avoid placing the goal inside a known
+        obstacle cylinder. Falls back to the last sample if no clear position
+        is found and logs a warning.
         """
-        dist = self.np_random.uniform(self.goal_min_dist, self.goal_max_dist)
-        angle = self.np_random.uniform(-math.pi, math.pi)
-        self._goal_x = self._robot_x + dist * math.cos(self._robot_yaw + angle)
-        self._goal_y = self._robot_y + dist * math.sin(self._robot_yaw + angle)
+        max_tries = 100
+        gx, gy = self._robot_x, self._robot_y
+        for attempt in range(max_tries):
+            dist = self.np_random.uniform(self.goal_min_dist, self.goal_max_dist)
+            angle = self.np_random.uniform(-math.pi, math.pi)
+            gx = self._robot_x + dist * math.cos(self._robot_yaw + angle)
+            gy = self._robot_y + dist * math.sin(self._robot_yaw + angle)
+            if not self._goal_in_obstacle(gx, gy) and not self._goal_out_of_bounds(gx, gy):
+                break
+            if attempt == max_tries - 1:
+                self.node.get_logger().warn(
+                    f"[EP {self._episode_count}] _sample_goal: no clear position "
+                    f"after {max_tries} tries — using last sample ({gx:.2f},{gy:.2f})"
+                )
+        self._goal_x = gx
+        self._goal_y = gy
 
     def _get_goal_relative(self):
         """
@@ -379,6 +687,8 @@ class Ros2NavEnv(gym.Env):
         super().reset(seed=seed)
         self._step_count = 0
         self._prev_dist = None
+        self._episode_count += 1
+        self._debug_this_episode = True   # log every episode; change to (% N == 0) once stable
 
         self._publish_action(0.0, 0.0)
 
@@ -391,9 +701,18 @@ class Ros2NavEnv(gym.Env):
         self._wait_for_topics()
 
         self._sample_goal()
+        self._episode_start_x = self._robot_x
+        self._episode_start_y = self._robot_y
 
         dist, _ = self._get_goal_relative()
         self._prev_dist = dist
+
+        if self._debug_this_episode:
+            self.node.get_logger().info(
+                f"[EP {self._episode_count}] START  "
+                f"robot=({self._robot_x:.3f},{self._robot_y:.3f}) yaw={self._robot_yaw:.3f}  "
+                f"goal=({self._goal_x:.3f},{self._goal_y:.3f}) dist={dist:.3f}"
+            )
 
         obs = self._get_obs()
         info = {
@@ -426,19 +745,31 @@ class Ros2NavEnv(gym.Env):
 
         self._publish_action(v, w)
 
-        end_time = time.time() + self.dt
-        while time.time() < end_time:
-            rclpy.spin_once(self.node, timeout_sec=0.01)
+        # Wait for dt seconds of SIMULATION time (not wall time).
+        # This keeps each step consistent regardless of Gazebo RTF.
+        # Falls back to wall time if /clock hasn't published yet.
+        if self._sim_time > 0.0:
+            sim_end = self._sim_time + self.dt
+            while self._sim_time < sim_end:
+                rclpy.spin_once(self.node, timeout_sec=0.01)
+        else:
+            end_time = time.time() + self.dt
+            while time.time() < end_time:
+                rclpy.spin_once(self.node, timeout_sec=0.01)
 
         obs = self._get_obs()
 
         dist, heading_err = self._get_goal_relative()
-        # Keep 0.0 readings (below sensor minimum range = touching an obstacle).
-        # Only filter inf (no-return beams pointing into open space).
-        # A 0.0 reading means the wall is within ~0.12 m — collision territory.
+        # Compute minimum LiDAR range for collision detection.
+        # Use numpy to uniformly handle nan, +inf, and -inf:
+        #   nan  → treated as max_range (no return, open space)
+        #   +inf → treated as max_range (beam beyond sensor limit)
+        #   -inf → treated as max_range (invalid reading, ignore)
+        #   0.0  → kept as-is (below minimum range = obstacle within ~0.12 m)
         if self._latest_scan:
-            valid = [r for r in self._latest_scan.ranges if r < float("inf")]
-            r_min = float(min(valid)) if valid else self.max_range
+            arr = np.array(self._latest_scan.ranges, dtype=np.float32)
+            arr = np.nan_to_num(arr, nan=self.max_range, posinf=self.max_range, neginf=self.max_range)
+            r_min = float(np.min(arr)) if len(arr) > 0 else self.max_range
         else:
             r_min = self.max_range
 
@@ -449,6 +780,36 @@ class Ros2NavEnv(gym.Env):
         truncated = (not terminated) and (self._step_count >= self.max_steps)
         if truncated:
             reward += self.timeout_reward
+
+        if self._debug_this_episode and self._step_count % 10 == 0:
+            self.node.get_logger().info(
+                f"[EP {self._episode_count}] step={self._step_count:4d}  "
+                f"pos=({self._robot_x:.3f},{self._robot_y:.3f}) yaw={self._robot_yaw:.3f}  "
+                f"v={v:.3f} w={w:.3f}  "
+                f"goal_dist={dist:.3f} heading_err={heading_err:.3f}  "
+                f"r_min={r_min:.3f}  reward={reward:.3f}"
+            )
+
+        if terminated or truncated:
+            outcome = reason if terminated else "timeout"
+            dist_moved = math.sqrt(
+                (self._robot_x - self._episode_start_x) ** 2
+                + (self._robot_y - self._episode_start_y) ** 2
+            )
+            if dist_moved < 0.05:
+                self.node.get_logger().warn(
+                    f"[EP {self._episode_count}] Robot moved only {dist_moved:.4f} m over "
+                    f"{self._step_count} steps. Check: (1) /cmd_vel message type "
+                    f"(Twist vs TwistStamped), (2) gz_model_name in config.yaml matches "
+                    f"Gazebo model name, (3) Gazebo real-time factor is not near zero."
+                )
+            self.node.get_logger().info(
+                f"[EP {self._episode_count}] END outcome={outcome}  "
+                f"steps={self._step_count}  dist_moved={dist_moved:.3f}m  "
+                f"pos=({self._robot_x:.3f},{self._robot_y:.3f})  "
+                f"goal_dist={dist:.3f}  r_min={r_min:.3f}  reward={reward:.3f}  "
+                f"last_cmd=v={v:.3f} w={w:.3f}"
+            )
 
         info = {
             "step": self._step_count,
