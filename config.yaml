@@ -13,35 +13,32 @@ env:
   v_max: 0.22
   w_max: 2.0
   r_safe: 0.30
-  gz_world_name: default            # Gazebo world name — confirmed via `gz service --list | grep world`
-  gz_model_name: burger             # Gazebo model name — run `gz model --list` to confirm
-  robot_radius: 0.105               # TurtleBot3 Burger footprint radius (m) — used for obstacle clearance
-  reset_x: -0.55                    # Safe reset position — away from the (0,0) center cylinder
+  gz_world_name: default            # Gazebo world name; confirm via `gz service --list`
+  gz_model_name: burger             # Gazebo model name; confirm via `gz model --list`
+  robot_radius: 0.105               # TurtleBot3 Burger footprint radius (m)
+  debug_logging: false              # true enables per-episode and per-step environment logs
+  reset_x: -0.55                    # Safe reset position away from the center cylinder
   reset_y: -0.55                    # Between cylinders at (-1.1,-1.1), (-1.1,0), (0,-1.1), (0,0)
-  # Navigable area — circular boundary.
-  #   Hexagon corners (green blobs) are at approx (-1.8,±2.7), (+1.8,±2.7), (3.5,0).
-  #   Inner wall face is ~0.5m inside those, giving ~1.8-2.0m usable radius.
-  #   Cylinders at ±1.1m are well inside the floor — NOT the boundary.
+  # Navigable area - circular boundary.
+  #   Hexagon corners (green blobs) are at about (-1.8,+/-2.7), (+1.8,+/-2.7), (3.5,0).
+  #   Inner wall face is about 0.5m inside those, giving about 1.8-2.0m usable radius.
+  #   Cylinders at +/-1.1m are well inside the floor, not the boundary.
   #   Using 1.8m keeps the robot off the walls with a safe margin.
   arena_radius: 1.8
 
 # Goal sampling and termination tolerances
 goal:
   min_dist: 0.5          # minimum goal distance from robot start (m)
-  max_dist: 2.0          # maximum goal distance from robot start (m) — keep within arena
-  tol_dist: 0.25         # success distance threshold (m) — from Phase 1
-  tol_heading_deg: 15.0  # success heading threshold (degrees) — from Phase 1
+  max_dist: 2.0          # maximum goal distance from robot start (m)
+  tol_dist: 0.25         # success distance threshold (m)
+  tol_heading_deg: 15.0  # success heading threshold (degrees)
   norm_dist: 5.0         # divisor for normalizing obs[60] goal distance feature
 
 # Reward function
-# Terminal rewards scaled to ~10-20x a typical episode's step total so the
-# signal is clear but doesn't completely wash out the dense shaping.
-# At max_steps=600 and ~-0.1/step the total step reward ≈ -60, so terminals
-# of ±100 are ~1.5-2x the step total — large enough to matter, small enough
-# that the dense progress signal still trains the policy.
+# Terminal rewards are large enough to matter without overwhelming dense shaping.
 reward:
   time_penalty: -0.1       # applied every step
-  safety_penalty: -1.0     # applied when r_min < r_safe (reduced so it shapes not dominates)
+  safety_penalty: -1.0     # applied when r_min < r_safe
   success_reward: 100.0    # terminal reward on goal reached
   collision_reward: -100.0 # terminal reward on collision (r_min < collision_dist)
   timeout_reward: -20.0    # terminal reward on episode timeout
@@ -64,28 +61,25 @@ sac:
   policy: MlpPolicy
   gamma: 0.99
   learning_rate: 0.0003
-  buffer_size: 100000      # replay buffer capacity (off-policy advantage over PPO)
-  learning_starts: 1000    # steps before first gradient update
+  buffer_size: 100000
+  learning_starts: 1000
   batch_size: 256
-  tau: 0.005               # soft target network update coefficient
-  ent_coef: auto           # automatic entropy tuning (SAC signature feature)
-  train_freq: 1            # update every step
+  tau: 0.005
+  ent_coef: auto
+  train_freq: 1
   gradient_steps: 1
   verbose: 1
 
-# Training schedule — shared across both algorithms
+# Training schedule shared across both algorithms
 training:
   ppo_timesteps: 500000
   sac_timesteps: 500000
-  eval_freq: 10000         # environment steps between evaluation runs
-  n_eval_episodes: 20      # episodes per periodic evaluation
-  checkpoint_freq: 50000   # steps between checkpoint saves
-  seed: 42                 # random seed for reproducibility
-  # Option B: Local machine with NVIDIA GPU
-  # Set device to "cuda" if you have an NVIDIA GPU with CUDA + cuDNN installed.
-  # Requires: correct NVIDIA drivers, CUDA toolkit, and torch built with CUDA support.
-  # Verify with: python3 -c "import torch; print(torch.cuda.is_available())"
-  # Set to "cpu" if no GPU is available (slower but functional for short runs).
+  eval_freq: 10000
+  n_eval_episodes: 20
+  checkpoint_freq: 50000
+  seed: 42
+  # Set device to "cuda" if you have an NVIDIA GPU with CUDA support.
+  # Set to "cpu" if no GPU is available.
   device: cpu
 
 # File paths for models and logs

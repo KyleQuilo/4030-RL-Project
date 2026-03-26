@@ -85,6 +85,7 @@ class Ros2NavEnv(gym.Env):
         self.w_max = float(env_cfg["w_max"])
         self.r_safe = float(env_cfg["r_safe"])
         self.robot_radius = float(env_cfg.get("robot_radius", 0.105))  # TurtleBot3 Burger footprint
+        self.debug_logging = bool(env_cfg.get("debug_logging", False))
         # Circular arena boundary — inscribed circle of the hexagonal room.
         # arena_radius is the safe goal-centre radius (already accounts for walls).
         self.arena_radius = float(env_cfg.get("arena_radius", 1.8))
@@ -143,7 +144,7 @@ class Ros2NavEnv(gym.Env):
 
         # Debug logging: tracks which episodes to log in detail
         self._episode_count = 0
-        self._debug_this_episode = True   # log every episode; change to (% N == 0) once working
+        self._debug_this_episode = self.debug_logging
 
         # Track how far the robot moved this episode for stuck-detection
         self._episode_start_x = 0.0
@@ -240,6 +241,16 @@ class Ros2NavEnv(gym.Env):
                 self.node.get_logger().info(f"[ENV] gz stats: {first}")
         except Exception as e:
             self.node.get_logger().warn(f"[ENV] Could not read gz stats: {e}")
+
+    def _debug_info(self, message: str):
+        """Log an info message only when per-episode debugging is enabled."""
+        if self.debug_logging:
+            self.node.get_logger().info(message)
+
+    def _debug_warn(self, message: str):
+        """Log a warning only when per-episode debugging is enabled."""
+        if self.debug_logging:
+            self.node.get_logger().warn(message)
 
     @staticmethod
     def _parse_pose(pose_el) -> tuple:
@@ -526,16 +537,16 @@ class Ros2NavEnv(gym.Env):
                 text=True,
             )
             if result.returncode == 0:
-                self.node.get_logger().info(
+                self._debug_info(
                     f"[EP {self._episode_count}] Reset OK -> "
                     f"world=({self._spawn_x:.3f},{self._spawn_y:.3f})"
                 )
             else:
-                self.node.get_logger().warn(
+                self._debug_warn(
                     f"set_pose failed (rc={result.returncode}): {result.stderr.strip()}"
                 )
         except Exception as e:
-            self.node.get_logger().warn(f"set_pose error: {e}")
+            self._debug_warn(f"set_pose error: {e}")
 
         # Brief pause for Gazebo to process set_pose before we read observations
         time.sleep(0.5)
@@ -557,7 +568,7 @@ class Ros2NavEnv(gym.Env):
             dy = self._robot_y - target_y
             if math.sqrt(dx * dx + dy * dy) < tolerance:
                 return
-        self.node.get_logger().warn(
+        self._debug_warn(
             f"[EP {self._episode_count}] _wait_for_pose timed out: "
             f"robot=({self._robot_x:.3f},{self._robot_y:.3f}) "
             f"target=({target_x:.3f},{target_y:.3f})"
@@ -583,7 +594,7 @@ class Ros2NavEnv(gym.Env):
             if not self._goal_in_obstacle(gx, gy) and not self._goal_out_of_bounds(gx, gy):
                 break
             if attempt == max_tries - 1:
-                self.node.get_logger().warn(
+                self._debug_warn(
                     f"[EP {self._episode_count}] _sample_goal: no clear position "
                     f"after {max_tries} tries — using last sample ({gx:.2f},{gy:.2f})"
                 )
@@ -706,7 +717,7 @@ class Ros2NavEnv(gym.Env):
         self._step_count = 0
         self._prev_dist = None
         self._episode_count += 1
-        self._debug_this_episode = True   # log every episode; change to (% N == 0) once stable
+        self._debug_this_episode = self.debug_logging
 
         self._publish_action(0.0, 0.0)
 
@@ -726,7 +737,7 @@ class Ros2NavEnv(gym.Env):
         self._prev_dist = dist
 
         if self._debug_this_episode:
-            self.node.get_logger().info(
+            self._debug_info(
                 f"[EP {self._episode_count}] START  "
                 f"robot=({self._robot_x:.3f},{self._robot_y:.3f}) yaw={self._robot_yaw:.3f}  "
                 f"goal=({self._goal_x:.3f},{self._goal_y:.3f}) dist={dist:.3f}"
@@ -800,7 +811,7 @@ class Ros2NavEnv(gym.Env):
             reward += self.timeout_reward
 
         if self._debug_this_episode and self._step_count % 10 == 0:
-            self.node.get_logger().info(
+            self._debug_info(
                 f"[EP {self._episode_count}] step={self._step_count:4d}  "
                 f"pos=({self._robot_x:.3f},{self._robot_y:.3f}) yaw={self._robot_yaw:.3f}  "
                 f"v={v:.3f} w={w:.3f}  "
@@ -815,13 +826,13 @@ class Ros2NavEnv(gym.Env):
                 + (self._robot_y - self._episode_start_y) ** 2
             )
             if dist_moved < 0.05:
-                self.node.get_logger().warn(
+                self._debug_warn(
                     f"[EP {self._episode_count}] Robot moved only {dist_moved:.4f} m over "
                     f"{self._step_count} steps. Check: (1) /cmd_vel message type "
                     f"(Twist vs TwistStamped), (2) gz_model_name in config.yaml matches "
                     f"Gazebo model name, (3) Gazebo real-time factor is not near zero."
                 )
-            self.node.get_logger().info(
+            self._debug_info(
                 f"[EP {self._episode_count}] END outcome={outcome}  "
                 f"steps={self._step_count}  dist_moved={dist_moved:.3f}m  "
                 f"pos=({self._robot_x:.3f},{self._robot_y:.3f})  "
