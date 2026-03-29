@@ -80,7 +80,7 @@ training:
   seed: 42
   # Set device to "cuda" if you have an NVIDIA GPU with CUDA support.
   # Set to "cpu" if no GPU is available.
-  device: cpu
+  device: cuda
 
 # File paths for models and logs
 paths:
