@@ -23,7 +23,6 @@ Thumbs.db
 .vscode/
 
 # RL outputs and model artifacts (do not commit)
-ppo_results/
 runs/
 tensorboard/
 *.zip
