@@ -191,19 +191,6 @@ The reward function used in the archived Phase 3 run is defined in `config.yaml`
 
 The terminal rewards remain dominant, while the progress term provides dense guidance during navigation.
 
-## Reward Function
-
-The reward function implements the Phase 1 MDP design:
-
-| Component | Value | Condition |
-|---|---|---|
-| Progress shaping | `+10 × (d_prev − d_curr)` | Every step |
-| Time penalty | `−0.5` | Every step |
-| Safety margin | `−2.0` | When min LiDAR range < 0.30 m |
-| Success | `+200` | Distance < 0.25 m and heading < 15° |
-| Collision | `−200` | Min LiDAR range < 0.20 m |
-| Timeout | `−50` | Episode reaches max_steps (600) |
-
 ## Observation Space (64-dim)
 
 | Index | Feature |
