@@ -178,6 +178,21 @@ All parameters are in `config.yaml`. Key sections:
 
 ## Reward Function
 
+The reward function used in the archived Phase 3 run is defined in `config.yaml` and reflects the final implemented environment behavior.
+
+| Component | Value | Condition |
+|---|---|---|
+| Progress shaping | `+60 × (d_prev − d_curr)` | Every step |
+| Time penalty | `−0.1` | Every step |
+| Safety margin | `−1.0` | When minimum LiDAR range falls below the safe margin |
+| Success | `+100` | Goal reached |
+| Collision | `−100` | Collision detected |
+| Timeout | `−20` | Episode reaches `max_steps = 600` |
+
+The terminal rewards remain dominant, while the progress term provides dense guidance during navigation.
+
+## Reward Function
+
 The reward function implements the Phase 1 MDP design:
 
 | Component | Value | Condition |
