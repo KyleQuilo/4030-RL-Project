@@ -40,17 +40,19 @@ class Ros2NavEnv(gym.Env):
         [0]  Linear velocity v in [0.0, v_max] m/s
         [1]  Angular velocity w in [-w_max, w_max] rad/s
 
-    Reward function (per step):
-        +10 * (d_prev - d_curr)  progress shaping toward goal
-        -0.5                     time penalty per step
-        -2.0                     safety margin penalty if r_min < r_safe
-        +200 / -200 / -50        terminal reward for success / collision / timeout
+    Reward function (per step, as configured in config.yaml):
+        +60 * (d_prev - d_curr)  progress shaping toward goal
+        -0.1                     time penalty per step
+        -1.0                     safety margin penalty if r_min < r_safe
+        +100 / -100 / -20        terminal reward for success / collision / timeout
 
     Notes:
         Goal positions are sampled randomly within [goal_min_dist, goal_max_dist]
         from the robot's pose at episode start. Collision is detected when the
         minimum LiDAR range falls below collision_dist. The /cmd_vel topic uses
-        geometry_msgs/msg/TwistStamped in this configuration.
+        geometry_msgs/msg/TwistStamped in this configuration. The reward values
+        are read from config.yaml, which is the source of truth for the archived
+        Phase 3 run.
     """
 
     metadata = {"render_modes": []}
