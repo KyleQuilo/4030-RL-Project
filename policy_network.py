@@ -1,28 +1,17 @@
 """
 policy_network.py
 
-Policy and value function network definitions.
+Policy network notes for the archived Phase 3 run.
 
-Phase 3 note:
-Both PPO and SAC agents in this project use Stable Baselines3's built-in
-MlpPolicy, which automatically constructs a two-hidden-layer MLP (default
-[64, 64]) for the actor and, where applicable, the critic. This design choice
-was made to ensure algorithm differences drive performance differences rather
-than architectural ones — both agents share the same network topology so
-comparisons are fair.
+Both PPO and SAC use the Stable Baselines3 `MlpPolicy` interface. In the archived
+run, the project did not explicitly override `policy_kwargs`, so the exact hidden
+layer widths were inherited from the installed Stable Baselines3 defaults rather
+than fixed directly by project code.
 
-For PPO (on-policy actor-critic):
-    Actor:  MLP -> Gaussian distribution over action space
-    Critic: Shared MLP trunk -> scalar value estimate V(s)
-
-For SAC (off-policy actor-critic):
-    Actor:  MLP -> mean and log-std of squashed Gaussian (reparameterization trick)
-    Critics: Two separate Q-networks Q1(s,a) and Q2(s,a) to reduce overestimation
-
-The PolicyNetwork class below documents the interface a custom network would
-implement if MlpPolicy were replaced with a custom architecture in future work.
+This means the comparison is still valid under the same archived software setup,
+but future work should explicitly set matched custom architectures for both agents
+to strengthen reproducibility and isolate algorithmic differences more cleanly.
 """
-
 
 class PolicyNetwork:
     """
