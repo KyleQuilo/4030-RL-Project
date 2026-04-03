@@ -120,6 +120,10 @@ Training outputs are saved to `ppo_results/` and `sac_results/` respectively, in
 - Best model checkpoint (`best_model.zip`)
 - Per-episode metrics CSV (`metrics.csv`)
 
+### Note on Model Weights
+
+Large trained model weight files were omitted from the submission archive. The ZIP includes the full source code, configuration files, and archived results needed to reproduce the analysis and figures in the report. Final trained model checkpoints were retained separately by the team.
+
 ## Evaluating Trained Agents
 
 ```bash
